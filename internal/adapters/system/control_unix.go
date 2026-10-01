@@ -23,7 +23,7 @@ func ListenControl(stateDir string, log *slog.Logger) (net.Listener, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, fmt.Errorf("mkdir state dir: %w", err)
 	}
 	path := ControlPath(stateDir)

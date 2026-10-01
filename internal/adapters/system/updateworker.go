@@ -9,6 +9,10 @@ import (
 	"runtime"
 )
 
+// UpdateWorkerErrLogFileName captures the detached update worker's stdout
+// and stderr in the state directory.
+const UpdateWorkerErrLogFileName = "update-worker.err.log"
+
 // LaunchUpdateWorker copies the currently running executable out of the
 // checkout before detaching. The old root can then be replaced safely.
 func LaunchUpdateWorker(ctx context.Context, stateDir, jobID string, log *slog.Logger) (int, error) {
@@ -28,7 +32,7 @@ func LaunchUpdateWorker(ctx context.Context, stateDir, jobID string, log *slog.L
 		return 0, fmt.Errorf("stage update worker: %w", err)
 	}
 	proc := NewProcess(stateDir, log)
-	pid, err := proc.spawnExecutable(ctx, path, []string{"update-worker", jobID}, "update-worker.err.log", "")
+	pid, err := proc.spawnExecutable(ctx, path, []string{"update-worker", jobID}, UpdateWorkerErrLogFileName, "")
 	if err != nil {
 		return 0, err
 	}

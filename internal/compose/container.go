@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/permgps/herdr-telegram-agents/internal/adapters/github"
@@ -190,6 +191,35 @@ func OpenURL(ctx context.Context, url string) error { return system.OpenURL(ctx,
 
 func PaneOpener(env PluginEnv, log *slog.Logger) domain.PaneOpener {
 	return herdr.NewCLI(env.BinPath, env.Root, env.Path, log)
+}
+
+// TightenPermissions makes the state and config directories 0700 and the
+// files this plugin writes there 0600 when an older build or the user left
+// them looser (Unix only; a no-op on Windows). It returns how many paths
+// it changed. Only the plugin's own names are listed: anything else in
+// those directories is left alone.
+func TightenPermissions(env PluginEnv, log *slog.Logger) int {
+	var dirs, files []string
+	if env.ConfigDir != "" {
+		dirs = append(dirs, env.ConfigDir)
+		for _, name := range []string{state.ConfigFileName, state.OptionsFileName} {
+			files = append(files, filepath.Join(env.ConfigDir, name))
+		}
+	}
+	if env.StateDir != "" {
+		dirs = append(dirs, env.StateDir, filepath.Join(env.StateDir, state.InboxDirName))
+		names := []string{
+			state.MappingFileName, state.SharingFileName, state.UpdateFileName, state.PidFileName,
+			logging.LogFileName, system.ErrLogFileName, system.UpdateWorkerErrLogFileName,
+		}
+		for i := 1; i <= logging.RotateKeep; i++ {
+			names = append(names, fmt.Sprintf("%s.%d", logging.LogFileName, i))
+		}
+		for _, name := range names {
+			files = append(files, filepath.Join(env.StateDir, name))
+		}
+	}
+	return state.TightenPermissions(dirs, files, log)
 }
 
 // NewPidFile returns the daemon pid file with process liveness checks.

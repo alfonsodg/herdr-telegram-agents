@@ -176,3 +176,34 @@ func TestStatusWithoutControlChannel(t *testing.T) {
 		t.Fatalf("Status = %v, want ErrControlUnavailable", err)
 	}
 }
+
+// TestStateDirCreatedPrivate: the spawn and the control socket run before
+// any state store, so they create the state directory on a fresh install;
+// it holds the mapping, the logs and the control socket and must be the
+// user's alone.
+func TestStateDirCreatedPrivate(t *testing.T) {
+	base := testkit.ShortTempDir(t)
+	spawnDir := filepath.Join(base, "spawn")
+	p := NewProcess(spawnDir, nil)
+	p.exe = "/bin/sh"
+	pid, err := p.Spawn(context.Background(), []string{"-c", "exit 0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, func() bool { return !p.Alive(pid) }, "child exit")
+	ctlDir := filepath.Join(base, "ctl")
+	ln, err := ListenControl(ctlDir, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	for _, dir := range []string{spawnDir, ctlDir} {
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o700 {
+			t.Errorf("%s mode = %04o, want 0700", dir, perm)
+		}
+	}
+}

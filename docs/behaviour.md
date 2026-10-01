@@ -726,6 +726,12 @@ in `config.json`:
 | `daemon.err.log` | state dir | stderr of the last daemon start |
 | `control.sock` | state dir | the daemon's control channel for the stop, resync and status actions (a named pipe on Windows, so no file) |
 
+The config and state directories are created 0700 and the files above 0600.
+On Unix every daemon start tightens the two directories, `inbox/` and the
+files named above to those modes when an older build or a manual change left
+them readable by others, and logs each change (`[FIX] permissions
+tightened`). Other files in those directories and symlinks are not touched.
+
 `stop`, `resync` and `status` reach the daemon through that control channel.
 A daemon from an older build that does not answer still receives SIGTERM or
 SIGHUP on Unix and is killed if it answers neither. The `status` action prints

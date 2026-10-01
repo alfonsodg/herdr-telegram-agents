@@ -32,6 +32,7 @@ type wiring struct {
 	env             func() (compose.PluginEnv, error)
 	loadConfig      func(ctx context.Context, env compose.PluginEnv, log *slog.Logger) (domain.Config, error)
 	fileLogger      func(env compose.PluginEnv, configLevel string) (*slog.Logger, io.Closer, error)
+	tightenPerms    func(env compose.PluginEnv, log *slog.Logger) int
 	notify          func(ctx context.Context, env compose.PluginEnv, body string, log *slog.Logger) error
 	pidFile         func(env compose.PluginEnv, log *slog.Logger) domain.PidFile
 	buildDaemon     func(ctx context.Context, env compose.PluginEnv, cfg domain.Config, log *slog.Logger, fatal context.CancelFunc) (*compose.Daemon, func(context.Context), func(), error)
@@ -50,12 +51,13 @@ var wire = defaultWiring()
 
 func defaultWiring() wiring {
 	return wiring{
-		env:         compose.Env,
-		loadConfig:  compose.LoadConfig,
-		fileLogger:  compose.NewFileLogger,
-		notify:      compose.Notify,
-		pidFile:     compose.NewPidFile,
-		buildDaemon: compose.BuildDaemon,
+		env:          compose.Env,
+		loadConfig:   compose.LoadConfig,
+		fileLogger:   compose.NewFileLogger,
+		tightenPerms: compose.TightenPermissions,
+		notify:       compose.Notify,
+		pidFile:      compose.NewPidFile,
+		buildDaemon:  compose.BuildDaemon,
 		buildSupervisor: func(env compose.PluginEnv, log *slog.Logger) supervisor {
 			return compose.BuildSupervisor(env, log)
 		},

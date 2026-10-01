@@ -51,6 +51,10 @@ func runDaemon(rc *runContext, _ []string) int {
 		return exitError
 	}
 	defer func() { _ = closer.Close() }()
+	// Directories created 0755 by older builds stay 0755 (MkdirAll never
+	// changes an existing one), so the daemon tightens what it owns at
+	// every start.
+	wire.tightenPerms(env, log)
 
 	pid := wire.pidFile(env, log)
 	if err := pid.Acquire(os.Getpid()); err != nil {

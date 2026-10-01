@@ -20,8 +20,11 @@ type UpdateStore struct {
 	Now  func() time.Time
 }
 
+// UpdateFileName is the update job file under the state dir.
+const UpdateFileName = "update.json"
+
 func NewUpdateStore(dir string, log *slog.Logger) *UpdateStore {
-	return &UpdateStore{path: filepath.Join(dir, "update.json"), log: log}
+	return &UpdateStore{path: filepath.Join(dir, UpdateFileName), log: log}
 }
 
 func (s *UpdateStore) Load(ctx context.Context) (domain.UpdateJob, error) {

@@ -28,11 +28,14 @@ type SharingStore struct {
 
 const maxSharingBytes = 8 << 20
 
+// SharingFileName is the private-sharing policy file under the state dir.
+const SharingFileName = "sharing.json"
+
 func NewSharingStore(dir string, log *slog.Logger) *SharingStore {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &SharingStore{path: filepath.Join(dir, "sharing.json"), log: log}
+	return &SharingStore{path: filepath.Join(dir, SharingFileName), log: log}
 }
 
 func (s *SharingStore) Load(ctx context.Context) (domain.SharingState, error) {

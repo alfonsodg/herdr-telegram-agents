@@ -76,7 +76,7 @@ func (p *Process) SpawnAt(ctx context.Context, root string, args []string) (int,
 }
 
 func (p *Process) spawnExecutable(ctx context.Context, exe string, args []string, logName, rootEnv string) (int, error) {
-	if err := os.MkdirAll(p.stateDir, 0o755); err != nil {
+	if err := os.MkdirAll(p.stateDir, 0o700); err != nil {
 		return 0, fmt.Errorf("mkdir state dir: %w", err)
 	}
 	errPath := filepath.Join(p.stateDir, logName)

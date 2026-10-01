@@ -410,7 +410,7 @@ The options today:
 | `Inbox size` | Inbox | Default 500 MB. The most all inbox files may take together. When a new file does not fit, the oldest files are deleted first; a file larger than the whole quota is refused with `⚠️ … file is too big`. Any integer of megabytes up to 100000 can be typed into `options.json`. |
 | `Delete files after` | Inbox | Default 7 days. Inbox files older than that are deleted once a day, at daemon start and when the option changes. `Off` keeps them. Any integer of days can be typed into `options.json`. |
 | `working` … `exited` | Appearance | The topic icon of each status and the emoji `/status` prints. Picking an emoji another status already uses answers `used by <status>` and changes nothing. A pick repaints every live topic at once (a `resync`), or when sync comes back on. |
-| `Redact secrets` | Privacy | Default on. Every text the daemon posts passes the redaction step described under [Secrets in posts](#secrets-in-posts). Off: raw text. A change applies to the next post. |
+| `Redact secrets` | Privacy | Default on. Every text the daemon posts passes the redaction step described under [Secrets in posts](#secrets-in-posts). Off: raw text, except the bot token, which is always masked. A change applies to the next post. |
 | `Delete closed topics after` | Topics | Default 30 days. The topic of an exited agent is deleted once it has been closed for that long, see [Topic cleanup](#topic-cleanup). `Off` keeps every topic. A number outside the picker's list (say `45`) can be typed into `options.json` by hand; the panel shows it without a bracketed button. |
 | `Keep icon notices for` | Topics | Default `20 s`. How long the bot's own topic notices ("changed the topic icon", a rename, close, reopen, the dashboard pin) stay before the daemon deletes them. Clients apply the new icon from that notice; a client that was asleep when it was deleted keeps drawing the old icon until it next opens the topic, which is why 10 s was not enough on Telegram Desktop (2026-09-06). `Keep` leaves every notice in place. A change applies to notices that arrive after it; one already waiting keeps its delay. Any integer of seconds up to 3600 can be typed into `options.json`. See [Topics and statuses](#topics-and-statuses). |
 
@@ -586,8 +586,11 @@ Every text that leaves the daemon for Telegram (blocked and done posts,
 `/screen` and `/screen all`, the `.txt` document, the follow-up of a
 forwarded Claude Code command, summary footers, document names, the labels
 of inline buttons, panel edits, topic names, button toasts and the sharing
-panel) passes one redaction step while `Redact secrets` is on. HTML posts are
-redacted between tags only, so a masked value never swallows a closing tag:
+panel) passes one redaction step while `Redact secrets` is on. HTML posts
+(including the question sent to the private chat) are redacted between tags
+only, so a masked value never swallows a closing tag, and each text run is
+read unescaped (`API_KEY='…'`, not `API_KEY=&#39;…&#39;`) and escaped again
+when something was masked:
 
 - API keys and tokens keep a recognisable prefix and their last four
   characters: `sk-…a1b2` (OpenAI and Anthropic), `ghp_…9f3e` and
@@ -599,15 +602,23 @@ redacted between tags only, so a masked value never swallows a closing tag:
   inside a longer name such as `DB_PASSWORD`, `AWS_SECRET_ACCESS_KEY`,
   `client_secret` or `?access_token=`, with `=` or `:`, and JSON keys such
   as `"password": "…"`) become `[redacted]`; the key stays. A query value
-  ends at `&`.
+  ends at `&`. Agent replies are redacted as Markdown, before rendering, so
+  a key in bold, italics or a code span (`**API_KEY**: …`,
+  `` `DB_PASSWORD`=… ``) counts too, and so does a table row
+  `| API_TOKEN | … |` whose value has a digit or a symbol in it (a header
+  row such as `| Token | Description |` stays).
 - Credentials in a URL keep the scheme and user:
   `postgres://app:[redacted]@db/app`.
 - The bot token itself, any string shaped like a Telegram bot token and
   `-----BEGIN … PRIVATE KEY-----` blocks (to the `END` line, or to the end of
-  the screen when it is cut) become `[redacted]`.
+  the screen when it is cut) become `[redacted]`. Both token forms are found
+  also when the terminal wrapped them across lines (a newline with
+  indentation between two characters).
 
-Every pattern has a minimum length, so ordinary words such as `token: none`
-or `password reset` are left alone. The log records how many replacements
+The bot token is masked even with `Redact secrets` off; the log then says
+`[FIX] bot token masked while redaction is off`. Every pattern has a
+minimum length, so ordinary words such as `token: none` or `password reset`
+are left alone. The log records how many replacements
 of which kind were made (`secrets redacted kinds="openai=1"`), never the
 value. The daemon log and the Herdr side are not touched.
 

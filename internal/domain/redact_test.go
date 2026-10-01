@@ -157,3 +157,87 @@ func TestRedactPrefixedKeysAndCredentials(t *testing.T) {
 		}
 	}
 }
+
+// TestRedactMarkdownDecoratedKeys: redaction runs on the raw Markdown an
+// agent wrote, so a key in bold, a code span or a table cell must still
+// have its value masked.
+func TestRedactMarkdownDecoratedKeys(t *testing.T) {
+	r := domain.NewRedactor()
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"bold key", "**API_KEY**: hunter2hunter2hunter2", "**API_KEY**: [redacted]"},
+		{"italic key", "*client_secret*=hunter2hunter2", "*client_secret*=[redacted]"},
+		{"code span key", "`DB_PASSWORD`=hunter2hunter2", "`DB_PASSWORD`=[redacted]"},
+		{"code span pair", "`DB_PASSWORD=hunter2hunter2`", "`DB_PASSWORD=[redacted]`"},
+		{"bold key code value", "**password**: `hunter2hunter2`", "**password**: `[redacted]`"},
+		{"table cell", "| API_TOKEN | hunter2hunter2 |", "| API_TOKEN | [redacted] |"},
+		{"table cell code", "| `DB_PASSWORD` | `hunter2hunter2` |", "| `DB_PASSWORD` | `[redacted]` |"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, stats := r.Redact(tc.in)
+			if got != tc.want || stats.String() != "keyvalue=1" {
+				t.Errorf("Redact(%q) = %q (%v), want %q", tc.in, got, stats, tc.want)
+			}
+			if again, s := r.Redact(got); again != got || s.Total() != 0 {
+				t.Errorf("second pass changed %q to %q", got, again)
+			}
+		})
+	}
+	for _, in := range []string{
+		"| Token | Description |",
+		"| password | Required |",
+		"| api_key | string | yes |",
+		"**Token**: none",
+		"echo $TOKEN | base64 -d | head -c 64",
+	} {
+		if got, stats := r.Redact(in); got != in || stats.Total() != 0 {
+			t.Errorf("Redact(%q) = %q; want unchanged", in, got)
+		}
+	}
+}
+
+// TestRedactSoftWrappedTokens: a terminal soft-wraps a long line, so the
+// screen text carries a newline (and the pane's indentation) in the middle
+// of a token.
+func TestRedactSoftWrappedTokens(t *testing.T) {
+	r := domain.NewRedactor(botToken)
+	for _, in := range []string{
+		"TG=" + botToken[:30] + "\n" + botToken[30:],
+		"TG=" + botToken[:12] + "\n  " + botToken[12:40] + "\r\n" + botToken[40:] + " ok",
+	} {
+		got, stats := r.Redact(in)
+		if strings.Contains(got, botToken[12:30]) || stats["exact"] != 1 {
+			t.Errorf("Redact(%q) = %q (%v); bot token survived", in, got, stats)
+		}
+	}
+	other := "9876543210:" + "BBGf3kJd9sLq2mN8pR4tV6wX0yZ1bC3dE5g"
+	in := "TOKEN=" + other[:25] + "\n   " + other[25:] + "\nnext line"
+	if got, stats := r.Redact(in); got != "TOKEN=[redacted]\nnext line" || stats.String() != "telegram=1" {
+		t.Errorf("Redact(%q) = %q (%v)", in, got, stats)
+	}
+	in = "id " + other[:25] + "\n" + other[25:]
+	if got, stats := r.Redact(in); got != "id [redacted]" || stats.String() != "telegram=1" {
+		t.Errorf("Redact(%q) = %q (%v)", in, got, stats)
+	}
+	// Ordinary lines that only meet at a newline stay as they are.
+	for _, in := range []string{"12345678\n:abc", "line one\nline two", "2026-10-01 12:34:56\n" + strings.Repeat("a", 40)} {
+		if got, stats := r.Redact(in); got != in || stats.Total() != 0 {
+			t.Errorf("Redact(%q) = %q; want unchanged", in, got)
+		}
+	}
+}
+
+// TestRedactExactOnly: the bot token is masked even when the owner turned
+// the pattern redaction off; nothing else is touched.
+func TestRedactExactOnly(t *testing.T) {
+	r := domain.NewRedactor(botToken)
+	in := "bot " + botToken[:20] + "\n" + botToken[20:] + " key sk-abcdefghijklmnopqrstuvwx password=hunter2secret"
+	got, stats := r.RedactExact(in)
+	if got != "bot [redacted] key sk-abcdefghijklmnopqrstuvwx password=hunter2secret" || stats.String() != "exact=1" {
+		t.Fatalf("RedactExact = %q (%v)", got, stats)
+	}
+}

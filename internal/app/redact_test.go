@@ -63,12 +63,137 @@ func TestRedactingGatewayMasksEverythingThatLeaves(t *testing.T) {
 		t.Fatalf("Direct = %+v / %+v", fake.Direct(), fake.Buttons(did))
 	}
 
+	// Option off: the patterns stay quiet, but the bot token is never sent.
 	on = false
-	if _, err := tg.Send(ctx, domain.Outgoing{ThreadID: 0, Text: "raw " + testKey}); err != nil {
+	if _, err := tg.Send(ctx, domain.Outgoing{ThreadID: 0, Text: "raw " + testKey + " bot " + testBotToken}); err != nil {
 		t.Fatal(err)
 	}
-	if got := fake.Sent(); got[len(got)-1].Text != "raw "+testKey {
-		t.Fatalf("option off still redacted: %q", got[len(got)-1].Text)
+	if got := fake.Sent(); got[len(got)-1].Text != "raw "+testKey+" bot [redacted]" {
+		t.Fatalf("option off: %q", got[len(got)-1].Text)
+	}
+}
+
+// TestRedactingGatewayMasksBotTokenWhenOff: turning privacy.redact off
+// must not leak the bot token through any method of the gateway.
+func TestRedactingGatewayMasksBotTokenWhenOff(t *testing.T) {
+	fake := testkit.NewFakeTelegram(nil)
+	tg := newRedactingGateway(fake, domain.NewRedactor(testBotToken), func() bool { return false }, nil)
+	ctx := context.Background()
+	id, err := tg.Send(ctx, domain.Outgoing{Text: "a " + testBotToken, Footer: testBotToken, Buttons: []domain.Button{{Text: testBotToken, Data: "1"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tg.SendDirect(ctx, 7, domain.Outgoing{Text: "<pre>" + testBotToken + "</pre>", HTML: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tg.SendDocument(ctx, domain.Document{Name: "n.txt", Data: []byte(testBotToken), Caption: testBotToken}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tg.EditText(ctx, id, preHTML(testBotToken), true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := tg.EditButtons(ctx, id, []domain.Button{{Text: testBotToken, Data: "1"}}); err != nil {
+		t.Fatal(err)
+	}
+	topic, err := tg.CreateTopic(ctx, testBotToken, domain.StatusIdle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := "n " + testBotToken
+	if err := tg.EditTopic(ctx, topic.ThreadID, domain.TopicPatch{Name: &name}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tg.AnswerButton(ctx, "cb", testBotToken); err != nil {
+		t.Fatal(err)
+	}
+	secret := testBotToken[11:]
+	for _, c := range fake.Calls() {
+		if strings.Contains(c, secret) {
+			t.Fatalf("bot token reached Telegram: %q", c)
+		}
+	}
+	for _, o := range append(fake.Sent(), fake.Direct()...) {
+		if strings.Contains(o.Text+o.Footer, secret) {
+			t.Fatalf("bot token reached Telegram: %+v", o)
+		}
+	}
+	if d := fake.Documents()[0]; strings.Contains(string(d.Data)+d.Caption, secret) {
+		t.Fatalf("bot token in document: %+v", d)
+	}
+	if strings.Contains(fake.Text(id), secret) || strings.Contains(fake.Buttons(id)[0].Text, secret) {
+		t.Fatalf("bot token in edit: %q / %+v", fake.Text(id), fake.Buttons(id))
+	}
+	if got, _ := fake.Topic(topic.ThreadID); strings.Contains(got.Name, secret) {
+		t.Fatalf("bot token in topic name: %q", got.Name)
+	}
+}
+
+// TestRedactingGatewayRedactsEscapedHTML: preHTML and pagerText escape
+// the screen before it reaches the gateway, so quotes arrive as numeric
+// entities; the key=value rule must still see the value.
+func TestRedactingGatewayRedactsEscapedHTML(t *testing.T) {
+	fake := testkit.NewFakeTelegram(nil)
+	tg := newRedactingGateway(fake, domain.NewRedactor(testBotToken), nil, nil)
+	p := PrivateRedactor{DestinationTelegram: fake}
+	ctx := context.Background()
+	id, err := tg.Send(ctx, domain.Outgoing{Text: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const secret = "hunter2hunter2hunter2"
+	for _, screen := range []string{
+		"export API_KEY='" + secret + "'",
+		`{"password": "` + secret + `"}`,
+		`DB_PASSWORD="` + secret + `" <x> & y`,
+	} {
+		if err := tg.EditText(ctx, id, preHTML(screen), true, nil); err != nil {
+			t.Fatal(err)
+		}
+		if got := fake.Text(id); strings.Contains(got, secret) || !strings.HasPrefix(got, "<pre>") || !strings.HasSuffix(got, "</pre>") {
+			t.Errorf("EditText(preHTML(%q)) sent %q", screen, got)
+		}
+		if _, err := tg.SendDirect(ctx, 7, domain.Outgoing{Text: pagerText("a", screen, domain.Dialog{}, "https://t.me/c/1/2"), HTML: true}); err != nil {
+			t.Fatal(err)
+		}
+		if d := fake.Direct(); strings.Contains(d[len(d)-1].Text, secret) {
+			t.Errorf("SendDirect(pagerText(%q)) sent %q", screen, d[len(d)-1].Text)
+		}
+		if _, err := p.SendAt(ctx, domain.TopicAddress{ChatID: 5}, domain.Outgoing{Text: preHTML(screen), HTML: true}, nil); err != nil {
+			t.Fatal(err)
+		}
+		if s := fake.Destination(5).Sent(); strings.Contains(s[len(s)-1].Text, secret) {
+			t.Errorf("private SendAt(preHTML(%q)) sent %q", screen, s[len(s)-1].Text)
+		}
+	}
+	// Text around the masked value keeps its escaping.
+	if got := fake.Text(id); got != "<pre>DB_PASSWORD=&#34;[redacted]&#34; &lt;x&gt; &amp; y</pre>" {
+		t.Errorf("escaping changed: %q", got)
+	}
+}
+
+// TestRedactingGatewaySendDirectKeepsHTMLValid: the pager's HTML must be
+// masked between tags so a value never swallows a closing tag.
+func TestRedactingGatewaySendDirectKeepsHTMLValid(t *testing.T) {
+	fake := testkit.NewFakeTelegram(nil)
+	tg := newRedactingGateway(fake, domain.NewRedactor(), nil, nil)
+	if _, err := tg.SendDirect(context.Background(), 7, domain.Outgoing{Text: "<pre>token=abcdefgh</pre>\n<a href=\"https://t.me/c/1/2\">open</a>", HTML: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.Direct()[0].Text; got != "<pre>token=[redacted]</pre>\n<a href=\"https://t.me/c/1/2\">open</a>" {
+		t.Fatalf("SendDirect HTML = %q", got)
+	}
+}
+
+// TestRedactingGatewaySoftWrappedBotToken: a code post of a screen where
+// the terminal wrapped the bot token across two lines.
+func TestRedactingGatewaySoftWrappedBotToken(t *testing.T) {
+	fake := testkit.NewFakeTelegram(nil)
+	tg := newRedactingGateway(fake, domain.NewRedactor(testBotToken), nil, nil)
+	if _, err := tg.Send(context.Background(), domain.Outgoing{Text: "TG=" + testBotToken[:30] + "\n" + testBotToken[30:], Code: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.Sent()[0].Text; got != "TG=[redacted]" {
+		t.Fatalf("wrapped token sent as %q", got)
 	}
 }
 

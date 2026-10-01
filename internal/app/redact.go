@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"html"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -15,6 +16,9 @@ import (
 // insertion point for the privacy.redact option: the call sites that build
 // posts never need to know about it. Everything else (pins, deletes, the
 // private-chat probe) is passed through untouched.
+//
+// The option switches the patterns only: the bot token is masked on every
+// call, since nobody needs it in the group and it controls the bot.
 type redactingGateway struct {
 	domain.TelegramGateway
 	red     *domain.Redactor
@@ -45,102 +49,121 @@ func NewRedactingGateway(tg domain.TelegramGateway, botToken string, enabled fun
 	return newRedactingGateway(tg, domain.NewRedactor(botToken), enabled, log)
 }
 
-func (g *redactingGateway) Send(ctx context.Context, out domain.Outgoing) (int, error) {
-	if !g.enabled() {
-		return g.TelegramGateway.Send(ctx, out)
+// redaction is one call's pass: the option is read once, so every text of
+// a message is masked the same way, and the counts add up for the log.
+type redaction struct {
+	full  bool
+	red   *domain.Redactor
+	stats domain.RedactionStats
+}
+
+func (g *redactingGateway) begin() *redaction {
+	return &redaction{full: g.enabled(), red: g.red, stats: domain.RedactionStats{}}
+}
+
+func (r *redaction) text(s string) string {
+	redact := r.red.RedactExact
+	if r.full {
+		redact = r.red.Redact
 	}
-	stats := domain.RedactionStats{}
-	out.Text = g.redactMarkup(out.Text, out.HTML, stats)
-	out.Footer = g.redact(out.Footer, stats)
-	out.Buttons = g.redactButtons(out.Buttons, stats)
-	g.report(out.ThreadID, "send", stats)
+	out, stats := redact(s)
+	for k, n := range stats {
+		r.stats[k] += n
+	}
+	return out
+}
+
+func (r *redaction) markup(s string, html bool) string {
+	if !html {
+		return r.text(s)
+	}
+	return redactHTML(s, r.text)
+}
+
+// buttons copies the slice so the caller's keyboard (kept by outbound for
+// later edits) is never rewritten in place.
+func (r *redaction) buttons(buttons []domain.Button) []domain.Button {
+	if len(buttons) == 0 {
+		return buttons
+	}
+	out := make([]domain.Button, len(buttons))
+	copy(out, buttons)
+	for i := range out {
+		out[i].Text = r.text(out[i].Text)
+	}
+	return out
+}
+
+func (g *redactingGateway) Send(ctx context.Context, out domain.Outgoing) (int, error) {
+	r := g.begin()
+	out.Text = r.markup(out.Text, out.HTML)
+	out.Footer = r.text(out.Footer)
+	out.Buttons = r.buttons(out.Buttons)
+	g.report(out.ThreadID, "send", r)
 	return g.TelegramGateway.Send(ctx, out)
 }
 
+// SendDirect carries the pager's HTML, so it is masked between tags like
+// Send.
 func (g *redactingGateway) SendDirect(ctx context.Context, userID int64, out domain.Outgoing) (int, error) {
-	if !g.enabled() {
-		return g.TelegramGateway.SendDirect(ctx, userID, out)
-	}
-	stats := domain.RedactionStats{}
-	out.Text = g.redact(out.Text, stats)
-	out.Footer = g.redact(out.Footer, stats)
-	out.Buttons = g.redactButtons(out.Buttons, stats)
-	g.report(0, "direct", stats)
+	r := g.begin()
+	out.Text = r.markup(out.Text, out.HTML)
+	out.Footer = r.text(out.Footer)
+	out.Buttons = r.buttons(out.Buttons)
+	g.report(0, "direct", r)
 	return g.TelegramGateway.SendDirect(ctx, userID, out)
 }
 
 func (g *redactingGateway) SendDocument(ctx context.Context, doc domain.Document) error {
-	if !g.enabled() {
-		return g.TelegramGateway.SendDocument(ctx, doc)
-	}
-	stats := domain.RedactionStats{}
-	doc.Data = []byte(g.redact(string(doc.Data), stats))
-	doc.Caption = g.redact(doc.Caption, stats)
-	doc.Name = g.redact(doc.Name, stats)
-	g.report(doc.ThreadID, "document", stats)
+	r := g.begin()
+	doc.Data = []byte(r.text(string(doc.Data)))
+	doc.Caption = r.text(doc.Caption)
+	doc.Name = r.text(doc.Name)
+	g.report(doc.ThreadID, "document", r)
 	return g.TelegramGateway.SendDocument(ctx, doc)
 }
 
 func (g *redactingGateway) EditText(ctx context.Context, messageID int, text string, html bool, buttons []domain.Button) error {
-	if !g.enabled() {
-		return g.TelegramGateway.EditText(ctx, messageID, text, html, buttons)
-	}
-	stats := domain.RedactionStats{}
-	text = g.redactMarkup(text, html, stats)
-	buttons = g.redactButtons(buttons, stats)
-	g.report(0, "edittext", stats)
+	r := g.begin()
+	text = r.markup(text, html)
+	buttons = r.buttons(buttons)
+	g.report(0, "edittext", r)
 	return g.TelegramGateway.EditText(ctx, messageID, text, html, buttons)
 }
 
 func (g *redactingGateway) EditButtons(ctx context.Context, messageID int, buttons []domain.Button) error {
-	if !g.enabled() {
-		return g.TelegramGateway.EditButtons(ctx, messageID, buttons)
-	}
-	stats := domain.RedactionStats{}
-	buttons = g.redactButtons(buttons, stats)
-	g.report(0, "buttons", stats)
+	r := g.begin()
+	buttons = r.buttons(buttons)
+	g.report(0, "buttons", r)
 	return g.TelegramGateway.EditButtons(ctx, messageID, buttons)
 }
 
 // CreateTopic masks the topic name: it is built from the agent label.
 func (g *redactingGateway) CreateTopic(ctx context.Context, name string, status domain.Status) (domain.Topic, error) {
-	if !g.enabled() {
-		return g.TelegramGateway.CreateTopic(ctx, name, status)
-	}
-	stats := domain.RedactionStats{}
-	name = domain.DisplayName(g.redact(name, stats))
-	g.report(0, "create_topic", stats)
+	r := g.begin()
+	name = domain.DisplayName(r.text(name))
+	g.report(0, "create_topic", r)
 	return g.TelegramGateway.CreateTopic(ctx, name, status)
 }
 
 // EditTopic masks a renamed topic; the caller's patch is not modified.
 func (g *redactingGateway) EditTopic(ctx context.Context, threadID int, patch domain.TopicPatch) error {
-	if !g.enabled() || patch.Name == nil {
+	if patch.Name == nil {
 		return g.TelegramGateway.EditTopic(ctx, threadID, patch)
 	}
-	stats := domain.RedactionStats{}
-	name := domain.DisplayName(g.redact(*patch.Name, stats))
+	r := g.begin()
+	name := domain.DisplayName(r.text(*patch.Name))
 	patch.Name = &name
-	g.report(threadID, "edit_topic", stats)
+	g.report(threadID, "edit_topic", r)
 	return g.TelegramGateway.EditTopic(ctx, threadID, patch)
 }
 
 // AnswerButton masks the toast text.
 func (g *redactingGateway) AnswerButton(ctx context.Context, callbackID, text string) error {
-	if !g.enabled() {
-		return g.TelegramGateway.AnswerButton(ctx, callbackID, text)
-	}
-	stats := domain.RedactionStats{}
-	text = g.redact(text, stats)
-	g.report(0, "answer", stats)
+	r := g.begin()
+	text = r.text(text)
+	g.report(0, "answer", r)
 	return g.TelegramGateway.AnswerButton(ctx, callbackID, text)
-}
-
-func (g *redactingGateway) redactMarkup(text string, html bool, stats domain.RedactionStats) string {
-	if !html {
-		return g.redact(text, stats)
-	}
-	return redactHTML(text, func(s string) string { return g.redact(s, stats) })
 }
 
 // htmlTag matches one tag of Telegram's HTML subset.
@@ -152,47 +175,41 @@ var htmlTag = regexp.MustCompile(`<[^<>]*>`)
 func redactHTML(text string, redact func(string) string) string {
 	tags := htmlTag.FindAllStringIndex(text, -1)
 	if len(tags) == 0 {
-		return redact(text)
+		return redactHTMLText(text, redact)
 	}
 	var b strings.Builder
 	b.Grow(len(text))
 	last := 0
 	for _, t := range tags {
-		b.WriteString(redact(text[last:t[0]]))
+		b.WriteString(redactHTMLText(text[last:t[0]], redact))
 		b.WriteString(text[t[0]:t[1]])
 		last = t[1]
 	}
-	b.WriteString(redact(text[last:]))
+	b.WriteString(redactHTMLText(text[last:], redact))
 	return b.String()
 }
 
-func (g *redactingGateway) redact(text string, stats domain.RedactionStats) string {
-	out, s := g.red.Redact(text)
-	for k, n := range s {
-		stats[k] += n
+// redactHTMLText masks one escaped text run. The patterns see the text as
+// it reads (`API_KEY='…'`, not `API_KEY=&#39;…&#39;`); a run with nothing
+// masked is returned byte for byte, a masked one is escaped again.
+func redactHTMLText(escaped string, redact func(string) string) string {
+	plain := html.UnescapeString(escaped)
+	masked := redact(plain)
+	if masked == plain {
+		return escaped
 	}
-	return out
-}
-
-// redactButtons copies the slice so the caller's keyboard (kept by
-// outbound for later edits) is never rewritten in place.
-func (g *redactingGateway) redactButtons(buttons []domain.Button, stats domain.RedactionStats) []domain.Button {
-	if len(buttons) == 0 {
-		return buttons
-	}
-	out := make([]domain.Button, len(buttons))
-	copy(out, buttons)
-	for i := range out {
-		out[i].Text = g.redact(out[i].Text, stats)
-	}
-	return out
+	return html.EscapeString(masked)
 }
 
 // report logs the kinds and counts of what was masked; the values never
 // reach the log.
-func (g *redactingGateway) report(threadID int, via string, stats domain.RedactionStats) {
-	if stats.Total() == 0 {
+func (g *redactingGateway) report(threadID int, via string, r *redaction) {
+	if r.stats.Total() == 0 {
 		return
 	}
-	g.log.Info("secrets redacted", slog.Int("thread_id", threadID), slog.String("via", via), slog.String("kinds", stats.String()))
+	if !r.full {
+		g.log.Warn("[FIX] bot token masked while redaction is off", slog.Int("thread_id", threadID), slog.String("via", via), slog.String("kinds", r.stats.String()))
+		return
+	}
+	g.log.Info("secrets redacted", slog.Int("thread_id", threadID), slog.String("via", via), slog.String("kinds", r.stats.String()))
 }

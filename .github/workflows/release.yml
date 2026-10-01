@@ -5,7 +5,8 @@
 # This job holds a token that can write releases, so every action is pinned
 # to a commit (a tag can be moved to other code), goreleaser to an exact
 # version, the Go cache is off, and the module files are checked, not
-# rewritten, before the build. Dependabot proposes pin updates.
+# rewritten, before the build. Pins are updated by hand: resolve the new
+# tag to its commit (`gh api repos/<owner>/<action>/commits/<tag>`).
 name: Release
 
 on:

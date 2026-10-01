@@ -109,6 +109,30 @@ func TestGitRunnerTruncates(t *testing.T) {
 	}
 }
 
+// TestGitRunnerTruncatesWithUserFilters covers a user whose own config
+// names filter drivers (git-lfs, as on CI runners): the filter probe lists
+// them, and that listing must not count against the cap of the output /git
+// returns.
+func TestGitRunnerTruncatesWithUserFilters(t *testing.T) {
+	dir := gitRepo(t)
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	cfg := "[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n\tsmudge = git-lfs smudge -- %f\n\tprocess = git-lfs filter-process\n\trequired = true\n"
+	if err := os.WriteFile(global, []byte(cfg), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+	big := strings.Repeat("a line that makes the diff long enough to pass the cap\n", 400)
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte(big), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewGitRunner(nil)
+	r.maxBytes = 64
+	res, err := r.Run(context.Background(), dir, []string{"diff", "HEAD"})
+	if err != nil || !res.Truncated || len(res.Output) > 64 || res.Output == "" {
+		t.Fatalf("truncated run = %+v, %v", res, err)
+	}
+}
+
 func TestGitRunnerTimeout(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("shell script stand-in is Unix only")

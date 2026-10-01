@@ -20,6 +20,11 @@ const (
 	// gitMaxOutput is the most stdout a run may produce; the rest is cut
 	// and the result marked truncated.
 	gitMaxOutput = 5 << 20
+	// gitMaxProbe is the most stdout the filter probe may produce. It is
+	// its own bound: the user's config (git-lfs) lists drivers too, and that
+	// listing must not eat the cap of the output /git returns. A probe past
+	// it fails the run, since an unread driver could not be switched off.
+	gitMaxProbe = 1 << 20
 	// gitWaitDelay bounds how long a run waits for its pipes once the
 	// timeout killed git: a child that inherited stdout (a hook, a helper)
 	// would otherwise keep Wait blocked until it exits on its own.
@@ -212,7 +217,7 @@ func (r *GitRunner) command(ctx context.Context, bin, dir string, argv []string)
 // status or diff without the overrides could start a driver.
 func (r *GitRunner) filters(ctx context.Context, bin, dir string) ([]string, error) {
 	cmd := r.command(ctx, bin, dir, append(append([]string(nil), gitSafeConfig...), gitFilterProbe...))
-	stdout := &limitedWriter{max: r.maxBytes}
+	stdout := &limitedWriter{max: gitMaxProbe}
 	var stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = stdout, &stderr
 	runErr := cmd.Run()

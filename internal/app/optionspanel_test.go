@@ -398,7 +398,7 @@ func TestPanelPostsGroup(t *testing.T) {
 		hooked = append(hooked, key+"="+cur.String(key))
 	})
 	pressPanel(f, t, 900, dataGroup(groupIndex(domain.GroupPosts)))
-	if got := texts(f.tg.Buttons(900)); strings.Join(got, "|") != "Screen Done post|☑ Turn summary line|20 lines Fold long replies after|☑ Trim the input frame|☐ React to prompts|☑ Questions in the bot's chat|Off Question delay|Off Skip short done posts|↺ Reset to defaults|‹ Back|✖ Close" {
+	if got := texts(f.tg.Buttons(900)); strings.Join(got, "|") != "Formatted Done post|☑ Turn summary line|20 lines Fold long replies after|☑ Trim the input frame|☐ React to prompts|☑ Questions in the bot's chat|Off Question delay|Off Skip short done posts|↺ Reset to defaults|‹ Back|✖ Close" {
 		t.Fatalf("posts buttons = %v", got)
 	}
 	if text := f.tg.Text(900); !strings.Contains(text, "<b>Questions in the bot&#39;s chat</b>: On: a question from an agent is posted into its topic without a sound") {
@@ -426,18 +426,18 @@ func TestPanelPostsGroup(t *testing.T) {
 		t.Fatalf("chrome toggle back: buttons=%v on=%v", got, f.opts.PostsChrome())
 	}
 	pressPanel(f, t, 900, dataGrid(domain.OptionPostsDone, 0))
-	if got := texts(f.tg.Buttons(900)); strings.Join(got, "|") != "[Screen]|Reply|Formatted|‹ Back" {
+	if got := texts(f.tg.Buttons(900)); strings.Join(got, "|") != "Screen|Reply|[Formatted]|‹ Back" {
 		t.Fatalf("done grid = %v", got)
 	}
-	pressPanel(f, t, 900, dataPick(domain.OptionPostsDone, 2))
-	if f.opts.Get().PostsDone() != domain.DoneFormatted || f.options.Saved() != 5 {
-		t.Fatalf("pick formatted: mode=%q saves=%d", f.opts.Get().PostsDone(), f.options.Saved())
+	pressPanel(f, t, 900, dataPick(domain.OptionPostsDone, 0))
+	if f.opts.Get().PostsDone() != domain.DoneScreen || f.options.Saved() != 5 {
+		t.Fatalf("pick screen: mode=%q saves=%d", f.opts.Get().PostsDone(), f.options.Saved())
 	}
 	saved, err := f.options.Load(f.ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := saved.String(domain.OptionPostsDone); got != "formatted" {
+	if got := saved.String(domain.OptionPostsDone); got != "screen" {
 		t.Fatalf("saved value = %q", got)
 	}
 	// The summary line is a plain checkbox; the fold picker offers Off, 10,

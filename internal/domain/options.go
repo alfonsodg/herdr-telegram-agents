@@ -265,20 +265,25 @@ func buildOptionSpecs() []OptionSpec {
 			Kind:        KindBool,
 			Default:     "true",
 		},
+		// Formatted by default since 2026-10-01: the rendered last reply
+		// reads best on a phone. It adds no notification: done posts are
+		// silent, a reply is capped at five messages and folded after
+		// posts.fold lines, and an agent without a readable transcript
+		// gets the screen as before.
 		{
 			Key:         OptionPostsDone,
 			Group:       GroupPosts,
 			Title:       "Done post",
 			Description: "What is posted when an agent finishes: Screen is the last 12 lines of the terminal, Reply is the agent's last message from its transcript, Formatted renders that message with bold, lists, links and code.",
 			Kind:        KindChoice,
-			Default:     string(DoneScreen),
+			Default:     string(DoneFormatted),
 			Choices:     ChoiceSourceDone,
 		},
 		{
 			Key:         OptionPostsMeta,
 			Group:       GroupPosts,
 			Title:       "Turn summary line",
-			Description: "End every done post with one line from the agent's transcript: how long the turn took, the model, how many files it edited and how many tokens it wrote. Claude Code only; without a transcript the post ends as before.",
+			Description: "End every done post with one line from the agent's transcript: how long the turn took, the model, how many files it edited and how many tokens it wrote. Claude Code, Codex and OpenCode only; without a transcript the post ends as before.",
 			Kind:        KindBool,
 			Default:     "true",
 		},
@@ -968,13 +973,13 @@ func (o Options) QuietPosts() PostsMode {
 }
 
 // PostsDone is what the topic receives when an agent turns done;
-// DoneScreen for an unknown value.
+// DoneFormatted, the default, for an unknown value.
 func (o Options) PostsDone() DoneMode {
 	switch m := DoneMode(strings.TrimSpace(o.String(OptionPostsDone))); m {
 	case DoneScreen, DoneReply, DoneFormatted:
 		return m
 	}
-	return DoneScreen
+	return DoneFormatted
 }
 
 // QuietReannounce reports whether leaving re-posts still-blocked agents

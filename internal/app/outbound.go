@@ -176,7 +176,7 @@ func newOutbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, chatID in
 		log = slog.New(slog.DiscardHandler)
 	}
 	paused := func() bool { return false }
-	doneMode := func() domain.DoneMode { return domain.DoneScreen }
+	doneMode := func() domain.DoneMode { return domain.DoneFormatted }
 	reactions := func() bool { return false }
 	minTurn := func() time.Duration { return 0 }
 	blockedDelay := func() time.Duration { return 0 }

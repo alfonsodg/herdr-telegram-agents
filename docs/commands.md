@@ -15,9 +15,9 @@ bot sends you, in your private chat with it, `❓ <agent> is waiting for you`
 with the dialog's options (or the last six screen lines) and a link to the
 post, with a sound; with it off the topic post itself rings. Either way you
 answer in the topic. See [Silence the group](behaviour.md#silence-the-group)
-for why. When it turns **done** the topic gets the last 12 lines of the
-screen, or the agent's last reply when `Done post` in `/options` says so (see
-[Done posts](behaviour.md#done-posts)); under it, one line with the turn's
+for why. When it turns **done** the topic gets the agent's last reply,
+rendered, or the last 12 lines of the screen when `Done post` in `/options`
+says `Screen` or no reply is found (see [Done posts](behaviour.md#done-posts)); under it, one line with the turn's
 duration, model, edited files and output tokens from the Claude Code transcript
 or the exact OpenCode session (`Turn summary line`), and a reply longer than `Fold long replies
 after` arrives collapsed behind an arrow. Every screen post ends on the agent's

@@ -1176,6 +1176,9 @@ func TestOutboundDoneSummaryLineUnavailable(t *testing.T) {
 	// A Codex agent in Screen mode: the screen, no line, one debug line
 	// and nothing at info.
 	f := newBridgeFixture(t)
+	if err := f.opts.Set(f.ctx, domain.OptionPostsDone, string(domain.DoneScreen), 1); err != nil {
+		t.Fatal(err)
+	}
 	a := f.add(t, "p1", "t1", "reviewer", domain.StatusWorking)
 	f.herdr.SetScreen("p1", "recap: all tests pass")
 	f.replies.Fail(a.Key, fmt.Errorf("%w: unsupported agent %q", domain.ErrNoReply, "codex"))
@@ -2194,5 +2197,49 @@ func TestCleanScreen(t *testing.T) {
 	}
 	if got, n := cleanScreen("\n a \n\n", true); got != " a" || n != 0 {
 		t.Errorf("cleanScreen plain = %q, %d", got, n)
+	}
+}
+
+func TestOutboundDoneDefaultsToFormatted(t *testing.T) {
+	// No posts.done set: a done agent with a transcript gets its reply
+	// rendered from Markdown, one without gets the screen.
+	f := newBridgeFixture(t)
+	a := f.add(t, "p1", "t1", "reviewer", domain.StatusWorking)
+	f.herdr.SetScreen("p1", "recap: all tests pass")
+	f.replies.Set(a.Key, "Done. **All** tests pass.")
+	f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusDone)})
+	f.fire(t, 1)
+	if sent := f.tg.Sent(); len(sent) != 1 || sent[0].Text != "Done. **All** tests pass." || !sent[0].Markdown || sent[0].Code {
+		t.Fatalf("Sent = %+v", sent)
+	}
+	b := f.add(t, "p2", "t2", "shell", domain.StatusWorking)
+	f.herdr.SetScreen("p2", "$ make test")
+	f.replies.Fail(b.Key, fmt.Errorf("%w: unsupported agent %q", domain.ErrNoReply, "pi"))
+	f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(b, domain.StatusDone)})
+	f.fire(t, 1)
+	if sent := f.tg.Sent(); len(sent) != 1 || sent[0].Text != "$ make test" || !sent[0].Code {
+		t.Fatalf("Sent = %+v", sent)
+	}
+	if logs := f.logBuf.String(); !strings.Contains(logs, `"msg":"reply source unavailable","key":"p2/t2","mode":"formatted"`) {
+		t.Errorf("log = %s", logs)
+	}
+}
+
+func TestOutboundNilOptionsDoneIsFormatted(t *testing.T) {
+	// Without an options registry the done mode falls back to the same
+	// default as the OptionSpecs row.
+	f := newBridgeFixture(t)
+	lookup := func(k domain.Key) (domain.Agent, bool) {
+		a, ok := f.agents[k]
+		return a, ok
+	}
+	f.out = newOutbound(f.herdr, f.tg, -1001234567890, []int64{1}, f.view, lookup, func() []domain.Agent { return nil }, f.capture, nil, f.replies, f.clock, nil)
+	a := f.add(t, "p1", "t1", "reviewer", domain.StatusWorking)
+	f.herdr.SetScreen("p1", "recap: all tests pass")
+	f.replies.Set(a.Key, "Done. **All** tests pass.")
+	f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusDone)})
+	f.fire(t, 1)
+	if sent := f.tg.Sent(); len(sent) != 1 || sent[0].Text != "Done. **All** tests pass." || !sent[0].Markdown {
+		t.Fatalf("Sent = %+v", sent)
 	}
 }

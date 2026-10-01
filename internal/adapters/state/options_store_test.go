@@ -125,3 +125,36 @@ func TestOptionsStoreCorruptFileIsAnError(t *testing.T) {
 		t.Error("corrupt load should still hand back defaults")
 	}
 }
+
+func TestOptionsStoreDoneModeDefaultAndSavedScreen(t *testing.T) {
+	// A file without posts.done gets the default, Formatted; a saved
+	// Screen survives Load and Save: the default never overrides a file.
+	s := state.NewOptionsStore(t.TempDir(), nil)
+	if err := os.WriteFile(s.Path(), []byte(`{"version": 1, "values": {"sync.enabled": true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PostsDone() != domain.DoneFormatted {
+		t.Fatalf("missing posts.done = %q, want formatted", got.PostsDone())
+	}
+	if err := os.WriteFile(s.Path(), []byte(`{"version": 1, "values": {"posts.done": "screen"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Save(context.Background(), got); err != nil {
+		t.Fatal(err)
+	}
+	got, err = s.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PostsDone() != domain.DoneScreen {
+		t.Fatalf("saved posts.done = %q, want screen", got.PostsDone())
+	}
+}

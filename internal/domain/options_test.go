@@ -132,7 +132,7 @@ func TestOptionGroupsAndSpecs(t *testing.T) {
 		def     string
 		choices string
 	}{
-		{OptionPostsDone, KindChoice, "screen", ChoiceSourceDone},
+		{OptionPostsDone, KindChoice, "formatted", ChoiceSourceDone},
 		{OptionPostsMeta, KindBool, "true", ""},
 		{OptionPostsFold, KindChoice, "20", ChoiceSourceLines},
 		{OptionPostsChrome, KindBool, "true", ""},
@@ -470,8 +470,12 @@ func TestQuietChoiceLabels(t *testing.T) {
 
 func TestPostsDone(t *testing.T) {
 	opts := DefaultOptions()
-	if got := opts.PostsDone(); got != DoneScreen {
-		t.Fatalf("default PostsDone = %q", got)
+	if got := opts.PostsDone(); got != DoneFormatted {
+		t.Fatalf("default PostsDone = %q, want formatted", got)
+	}
+	// A hand-edited value the panel never offers reads as the default.
+	if got := (Options{values: map[string]string{OptionPostsDone: "html"}}).PostsDone(); got != DoneFormatted {
+		t.Errorf("unknown PostsDone = %q, want formatted", got)
 	}
 	for _, v := range DoneChoices() {
 		set, err := opts.With(OptionPostsDone, v)

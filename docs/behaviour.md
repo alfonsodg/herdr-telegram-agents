@@ -208,7 +208,7 @@ covers agents that finish an answer without reporting `done`. Duplicate
 screen text is still suppressed. What the post holds is the `Done post`
 option of the Posts group:
 
-- **Screen** (default): the last 12 lines of the terminal, as a code block,
+- **Screen**: the last 12 lines of the terminal, as a code block,
   without Claude Code's input frame at the bottom (the two `─` rules with the
   empty `❯` row between them, the status line and the mode hint) while
   `Trim the input frame` in the Posts group is on, so the post ends on the
@@ -274,13 +274,20 @@ option of the Posts group:
   `herdr integration install codex` so Herdr reports `agent_session`. Codex is
   read from the daemon's own home directory (`~/.codex`; `CODEX_HOME` is not
   honoured), so a Codex running inside WSL is not found.
-- **Formatted**: the same reply rendered for Telegram: headings become bold,
+- **Formatted** (default): the same reply rendered for Telegram: headings become bold,
   `- ` lists become `•`, quotes get a bar, `[text](url)` becomes a link,
   inline code and fenced blocks keep their monospace, pipe tables are
   monospaced too. A fenced block never straddles two messages; long replies
   are split and stop after five messages with `… (+N chars)` at the end.
   Should Telegram reject the markup (`can't parse entities`), that part is
-  sent once more as a plain code block and the log says so.
+  sent once more as a plain code block and the log says so. An agent with
+  no readable reply (any kind other than Claude Code, Codex and OpenCode,
+  or a missing or stale transcript) gets the screen post instead.
+
+`Formatted` has been the default since 2026-10-01; before that it was
+`Screen`. `options.json` stores every option once the panel has saved it,
+so an install that saved `Screen` keeps it: switch it in `/options` →
+Posts → `Done post`.
 
 Under every done post, in all three modes, sits the **turn summary line**
 (`Turn summary line` in the Posts group, default on): one plain-text line
@@ -397,7 +404,7 @@ The options today:
 | `Hold topic edits` | Quiet | Default on. While at the desk no topic is created, renamed, closed, reopened or given a new icon; each of those is a Telegram service message that rings the phone. Off keeps topic edits live while at the desk. |
 | `Screen posts` | Quiet | Default `Silent`. What happens to blocked and done screens while at the desk: `Silent` posts without a sound (Telegram still shows a silent banner), `Held` posts nothing until you leave, `Normal` posts as usual. |
 | `Re-announce on leaving` | Quiet | Default on. When you leave, the screen of every agent still waiting for an answer is posted again with a sound, once per question. Off: only agents that have no post at all yet are posted. |
-| `Done post` | Posts | Default `Screen`. What a topic receives when its agent finishes: `Screen` posts the last 12 terminal lines in monospace; `Reply` posts the agent's last message from its Claude Code transcript (`~/.claude/projects/<cwd slug>/`, newest session file) in monospace; `Formatted` renders that message: headings and bold, `•` lists, links, inline and fenced code, tables in monospace. A reply longer than five messages is cut with `… (+N chars)`. For OpenCode the message comes from the CLI export for the pane's session; for Codex it is the final answer of the last completed turn, read from the pane's rollout file. Falls back to `Screen` for other agents or when no reply is found, see [Done posts](#done-posts). |
+| `Done post` | Posts | Default `Formatted`. What a topic receives when its agent finishes: `Screen` posts the last 12 terminal lines in monospace; `Reply` posts the agent's last message from its Claude Code transcript (`~/.claude/projects/<cwd slug>/`, newest session file) in monospace; `Formatted` renders that message: headings and bold, `•` lists, links, inline and fenced code, tables in monospace. A reply longer than five messages is cut with `… (+N chars)`. For OpenCode the message comes from the CLI export for the pane's session; for Codex it is the final answer of the last completed turn, read from the pane's rollout file. Falls back to `Screen` for other agents or when no reply is found, see [Done posts](#done-posts). |
 | `Turn summary line` | Posts | Default on. Every done post (`Screen`, `Reply` and `Formatted`) ends with one line from the agent's transcript: `⏱ 4 min · fable-5-1 · ✏️ 3 files · ↑ 12k tokens` (turn duration, model, distinct files edited, output tokens). Claude Code, OpenCode and Codex only (no file count for Codex); without a transcript the post ends as before and the log has `turn meta unavailable` at debug. A transcript written before the turn began is skipped. Off: no line and, in `Screen` mode, no transcript read. See [Done posts](#done-posts). |
 | `Fold long replies after` | Posts | Default `20 lines`. A `Reply` or `Formatted` done post whose message part has more lines than this arrives collapsed in Telegram's expandable quote: the first lines and an arrow that opens the rest; the summary line stays visible under it. `Off` never folds; `Screen` posts are never folded. Any integer of lines up to 1000 can be typed into `options.json`. See [Done posts](#done-posts). |
 | `Trim the input frame` | Posts | Default on. Every screen post (done and blocked screens, `/screen`, `/screen all`, the tails of the Claude Code commands, the pager's six lines) loses Claude Code's input frame at the bottom: the `─` rule, the empty `❯` row, the second rule, the status line (`… │ main ✓ │ 14%: …`) and the mode hint (`⏵⏵ auto mode on (shift+tab to cycle)` or `? for shortcuts`). The cut walks up from the bottom and stops at the first line that is none of these, so a dialog and its options are never touched, a `❯` row with typed text is left alone and a screen without the frame (Codex, any other agent) passes through unchanged. The duplicate check runs after the cut, so a screen that differs only in the status line's clock is not posted twice. Off posts the screen as captured. |
@@ -417,7 +424,7 @@ The options today:
 Values are saved in `options.json` next to `config.json` (mode 0600) as
 `{"version": 1, "values": {"sync.enabled": true, "sync.dashboard": true,
 "quiet.enabled": true, "quiet.idle_minutes": "3", "quiet.posts": "silent",
-"posts.done": "screen", "posts.meta": true, "posts.fold": "20",
+"posts.done": "formatted", "posts.meta": true, "posts.fold": "20",
 "posts.chrome": true, "posts.reactions": false, "posts.pager": true,
 "posts.blocked_delay": "0", "inbox.enabled": true, "inbox.max_mb": "20",
 "inbox.max_total_mb": "500", "inbox.delete_after_days": "7", "icons.working": "⚡", "privacy.redact": true,

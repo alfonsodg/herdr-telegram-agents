@@ -1,0 +1,8 @@
+# Proposes updates for the commit-pinned actions in .github/workflows; the
+# pins themselves keep a moved tag from reaching CI or the release job.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly

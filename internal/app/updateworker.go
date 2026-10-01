@@ -67,6 +67,15 @@ func (w *UpdateWorker) Run(ctx context.Context, id string) (domain.UpdateJob, er
 	if err := w.phase(ctx, &job, "installed"); err != nil {
 		return w.rollback(ctx, job, "journal_failed", err)
 	}
+	// Reading the installation runs the new binary (`herdr-tg version`), so
+	// its checksum is checked at the approved root first; the check against
+	// the registered root below stays.
+	if err := w.Installer.Verify(ctx, job, job.SourceRoot); err != nil {
+		if w.Log != nil {
+			w.Log.Warn("[FIX] new binary refused before first run", slog.String("job", job.ID), slog.String("root", job.SourceRoot))
+		}
+		return w.rollback(ctx, job, "checksum_mismatch", err)
+	}
 	installed, err := w.Reader.ReadInstallation(ctx)
 	if err != nil {
 		return w.rollback(ctx, job, "inspect_failed", err)

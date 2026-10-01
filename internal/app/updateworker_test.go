@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -39,9 +40,15 @@ func (l *memoryUpdateLock) Acquire() error {
 func (l *memoryUpdateLock) Active() bool   { return l.held }
 func (l *memoryUpdateLock) Release() error { l.held = false; return nil }
 
-type changingReader struct{ value domain.PluginInstallation }
+// changingReader stands in for the InstallationReader, which executes the
+// installed binary (`herdr-tg version`); calls records each read as "read".
+type changingReader struct {
+	value domain.PluginInstallation
+	calls []string
+}
 
 func (r *changingReader) ReadInstallation(context.Context) (domain.PluginInstallation, error) {
+	r.calls = append(r.calls, "read")
 	return r.value, nil
 }
 
@@ -49,6 +56,7 @@ type fakeUpdateInstaller struct {
 	reader       *changingReader
 	proc         *testkit.FakeProcess
 	failInstall  bool
+	failVerify   bool
 	rollbacks    int
 	failRollback bool
 }
@@ -60,12 +68,20 @@ func (f *fakeUpdateInstaller) Install(_ context.Context, _ domain.UpdateJob) err
 	if f.failInstall {
 		return errors.New("install failed")
 	}
+	f.reader.calls = append(f.reader.calls, "install")
 	f.reader.value.ManifestVersion = "1.2.0"
 	f.reader.value.BinaryVersion = "1.2.0"
 	return nil
 }
-func (f *fakeUpdateInstaller) Verify(context.Context, domain.UpdateJob, string) error { return nil }
+func (f *fakeUpdateInstaller) Verify(_ context.Context, _ domain.UpdateJob, root string) error {
+	f.reader.calls = append(f.reader.calls, "verify "+root)
+	if f.failVerify {
+		return errors.New("checksum differs")
+	}
+	return nil
+}
 func (f *fakeUpdateInstaller) Rollback(_ context.Context, _ domain.UpdateJob) error {
+	f.reader.calls = append(f.reader.calls, "rollback")
 	f.rollbacks++
 	if f.failRollback {
 		return errors.New("rollback failed")
@@ -147,6 +163,40 @@ func TestUpdateWorkerHealthTimeoutAndStuck(t *testing.T) {
 			job, err := worker.Run(context.Background(), "job")
 			if err == nil || job.Phase != tc.want || installer.rollbacks != 1 {
 				t.Fatalf("job=%+v err=%v rollbacks=%d", job, err, installer.rollbacks)
+			}
+		})
+	}
+}
+
+// TestUpdateWorkerVerifiesBeforeExecuting: reading the installation runs the
+// new binary, so its checksum is verified at the job's root first, and a bad
+// checksum rolls back without the new binary ever running.
+func TestUpdateWorkerVerifiesBeforeExecuting(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		failVerify bool
+		phase      string
+		want       []string
+	}{
+		{"good checksum", false, "succeeded", []string{"install", "verify /src", "read", "verify /src"}},
+		{"bad checksum", true, "rolled_back", []string{"install", "verify /src", "rollback", "read"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := testkit.NewFakeClock(time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC))
+			proc := testkit.NewFakeProcess(clock.Now)
+			reader := &changingReader{value: domain.PluginInstallation{Root: "/src", ManifestVersion: "1.0.0", BinaryVersion: "1.0.0"}}
+			installer := &fakeUpdateInstaller{reader: reader, proc: proc, failVerify: tc.failVerify}
+			store := &memoryUpdateStore{job: domain.UpdateJob{ID: "job", Phase: "queued", OldVersion: "1.0.0", OldBinaryVersion: "1.0.0", TargetVersion: "1.2.0", SourceRoot: "/src"}}
+			worker := &UpdateWorker{Store: store, Lock: &memoryUpdateLock{}, Installer: installer, Reader: reader, Supervisor: NewSupervisor(proc, proc, clock, nil)}
+			job, err := worker.Run(context.Background(), "job")
+			if (err != nil) != tc.failVerify || job.Phase != tc.phase {
+				t.Fatalf("job=%+v err=%v", job, err)
+			}
+			if strings.Join(reader.calls, ",") != strings.Join(tc.want, ",") {
+				t.Fatalf("calls = %q, want %q", reader.calls, tc.want)
+			}
+			if tc.failVerify && job.ErrorCode != "checksum_mismatch" {
+				t.Fatalf("error code = %q", job.ErrorCode)
 			}
 		})
 	}

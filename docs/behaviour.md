@@ -459,7 +459,10 @@ fast-forwards, and runs the release's checksum-verified install script. The
 install script gets the approved SHA-256 (`HERDR_TG_EXPECTED_SHA256`) and
 refuses a downloaded binary that differs from it before running it; the
 download overrides `HERDR_TG_BASE_URL` and `HERDR_TG_ALLOW_INSECURE_BASE`
-never reach it from the daemon's environment.
+never reach it from the daemon's environment. After the install, of either
+kind, the worker checks the SHA-256 of the new `bin/herdr-tg` against the
+approved one before anything runs it (reading its version included); a
+mismatch rolls back without the new binary ever starting.
 Detached branches, local changes, another repository, and an incompatible
 Herdr version show the release and a reason without an Update button.
 

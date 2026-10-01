@@ -482,10 +482,15 @@ func (s *Sharing) Lifecycle(ctx context.Context, e AgentEvent, now time.Time) er
 		return nil
 	}
 	changed := false
+	// live lists the grants this event may change: active, or suspended by
+	// an exit. Only they are rolled back below; revoked and expired grants
+	// must never come back as suspended.
+	var live []string
 	for id, g := range s.state.Grants {
 		if g.Key.PaneID != e.Agent.PaneID || (g.State != domain.GrantActive && !(g.State == domain.GrantSuspended && g.SuspendReason == "exited")) {
 			continue
 		}
+		live = append(live, id)
 		if e.Kind == AgentGone {
 			g.State = domain.GrantSuspended
 			g.SuspendReason = "exited"
@@ -524,13 +529,13 @@ func (s *Sharing) Lifecycle(ctx context.Context, e AgentEvent, now time.Time) er
 	}
 	s.dirty = true
 	if err := s.saveLocked(ctx, now); err != nil {
-		for id, g := range s.state.Grants {
-			if g.Key.PaneID == e.Agent.PaneID {
-				g.State = domain.GrantSuspended
-				g.SuspendReason = "persistence"
-				s.state.Grants[id] = g
-			}
+		for _, id := range live {
+			g := s.state.Grants[id]
+			g.State = domain.GrantSuspended
+			g.SuspendReason = "persistence"
+			s.state.Grants[id] = g
 		}
+		s.log.Warn("[FIX] lifecycle save failed; affected grants suspended", slog.String("pane_id", e.Agent.PaneID), slog.Int("grants", len(live)))
 		return err
 	}
 	return nil

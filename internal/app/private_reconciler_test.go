@@ -103,3 +103,57 @@ func TestPrivateMirrorAmbiguousCreateNotRetried(t *testing.T) {
 		t.Fatal("stale create retried")
 	}
 }
+
+// TestLifecycleSaveFailureKeepsRevokedGrants: when the exit of a shared
+// agent cannot be saved, the rollback suspends the grants the event affects.
+// It used to suspend every grant on the pane, so a revoked grantee became
+// "suspended persistence" and counted as a grantee again.
+func TestLifecycleSaveFailureKeepsRevokedGrants(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1000, 0)
+	store := testkit.NewMemSharingStore()
+	s := app.NewSharing(ctx, store, nil)
+	s.BotID = 42
+	s.Now = func() time.Time { return now }
+	a := domain.Agent{Key: domain.Key{PaneID: "p", TerminalID: "t", SessionDigest: "digest"}, Name: "Agent", Status: domain.StatusIdle}
+	s.Agent = func(k domain.Key) (domain.Agent, bool) { return a, k == a.Key }
+	bot := domain.BotIdentity{ID: 42, HasTopicsEnabled: true}
+	for _, id := range []int64{10, 11} {
+		if _, err := s.Register(ctx, id, id, "name", "", now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	revoked, err := s.Grant(ctx, app.GrantRequest{RecipientID: 10, Key: a.Key, Role: domain.ShareControl, Bot: bot}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ChangeState(ctx, revoked.ID, revoked.Revision, domain.GrantRevoked, now); err != nil {
+		t.Fatal(err)
+	}
+	active, err := s.Grant(ctx, app.GrantRequest{RecipientID: 11, Key: a.Key, Role: domain.ShareRead, Bot: bot}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &app.PrivateReconciler{Sharing: s, Telegram: testkit.NewFakeTelegram(nil), Agent: s.Agent, Now: s.Now}
+	if err := r.Grant(ctx, active); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := s.Snapshot()
+	if before.Grants[active.ID].State != domain.GrantActive || s.Grantee(10) {
+		t.Fatal("setup: want one active grant and one revoked grantee")
+	}
+	store.Fail(errors.New("disk full"))
+	if err := s.Lifecycle(ctx, app.AgentEvent{Kind: app.AgentGone, Agent: a}, now); err == nil {
+		t.Fatal("failed save reported success")
+	}
+	st, _ := s.Snapshot()
+	if g := st.Grants[revoked.ID]; g != before.Grants[revoked.ID] {
+		t.Fatalf("revoked grant changed: %s %s", g.State, g.SuspendReason)
+	}
+	if s.Grantee(10) {
+		t.Fatal("revoked recipient counts as a grantee again")
+	}
+	if g := st.Grants[active.ID]; g.State != domain.GrantSuspended || g.SuspendReason != "persistence" {
+		t.Fatalf("affected grant %s %s, want suspended persistence", g.State, g.SuspendReason)
+	}
+}

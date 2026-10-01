@@ -371,18 +371,52 @@ func TestOutboundScreenPrefersFreshReply(t *testing.T) {
 	}
 }
 
-func TestOutboundScreenOnlyOpenCodeUsesReply(t *testing.T) {
-	f := newBridgeFixture(t)
-	a := f.add(t, "p1", "t1", "a", domain.StatusIdle)
-	a.Kind = "claude"
-	f.agents[a.Key] = a
-	f.herdr.SetScreen("p1", "literal screen")
-	f.replies.Set(a.Key, "formatted reply")
-	if err := f.out.Screen(f.ctx, a.Key, 0); err != nil {
-		t.Fatal(err)
+func TestOutboundScreenOtherKindsKeepTheScreen(t *testing.T) {
+	for _, kind := range []string{"claude", "gemini", "pi", ""} {
+		f := newBridgeFixture(t)
+		a := f.add(t, "p1", "t1", "a", domain.StatusIdle)
+		a.Kind = kind
+		f.agents[a.Key] = a
+		f.herdr.SetScreen("p1", "literal screen")
+		f.replies.Set(a.Key, "formatted reply")
+		if err := f.out.Screen(f.ctx, a.Key, 0); err != nil {
+			t.Fatal(err)
+		}
+		if len(f.replies.Calls()) != 0 || len(f.herdr.Reads()) != 1 || f.tg.Sent()[0].Text != "literal screen" {
+			t.Fatalf("%q /screen changed: calls %v, reads %v, sent %v", kind, f.replies.Calls(), f.herdr.Reads(), f.tg.Sent())
+		}
 	}
-	if len(f.replies.Calls()) != 0 || len(f.herdr.Reads()) != 1 || f.tg.Sent()[0].Text != "literal screen" {
-		t.Fatalf("Claude /screen changed: calls %v, reads %v, sent %v", f.replies.Calls(), f.herdr.Reads(), f.tg.Sent())
+}
+
+// TestOutboundScreenCodexUsesReply covers a bare /screen on Codex: an idle
+// or done agent posts its final answer whole (it can be taller than the
+// screen), a working or blocked one still gets the screen, and /screen N
+// stays a literal screen read.
+func TestOutboundScreenCodexUsesReply(t *testing.T) {
+	answer := "Plan:\n1. Do the **first** thing.\n2. Then the second."
+	for _, st := range []domain.Status{domain.StatusIdle, domain.StatusDone, domain.StatusWorking, domain.StatusBlocked} {
+		for _, lines := range []int{0, 10} {
+			f := newBridgeFixture(t)
+			a := f.add(t, "p1", "t1", "a", st)
+			a.Kind = "codex"
+			f.agents[a.Key] = a
+			f.herdr.SetScreen("p1", "codex screen tail")
+			f.replies.Set(a.Key, answer)
+			if err := f.out.Screen(f.ctx, a.Key, lines); err != nil {
+				t.Fatal(err)
+			}
+			sent := f.tg.Sent()
+			wantReply := lines == 0 && st.ReadyForInput()
+			if wantReply {
+				if len(sent) != 1 || sent[0].Text != answer || !sent[0].Markdown || sent[0].Code || sent[0].MaxParts != replyMaxParts || len(f.herdr.Reads()) != 0 {
+					t.Fatalf("%s /screen %d: sent %+v, reads %v; want the answer, rendered and bounded", st, lines, sent, f.herdr.Reads())
+				}
+				continue
+			}
+			if len(sent) != 1 || sent[0].Text != "codex screen tail" || !sent[0].Code || len(f.replies.Calls()) != 0 {
+				t.Fatalf("%s /screen %d: sent %+v, calls %v; want the screen and no reply lookup", st, lines, sent, f.replies.Calls())
+			}
+		}
 	}
 }
 
@@ -576,6 +610,39 @@ func TestOutboundScreenFallsBackWhenNoReply(t *testing.T) {
 	}
 	if sent := f.tg.Sent(); len(sent) != 1 || sent[0].Text != "raw screen text" || !sent[0].Code {
 		t.Fatalf("Sent = %+v", sent)
+	}
+}
+
+// TestOutboundScreenCodexRemovedAnswerIsNotSent covers a Codex thread whose
+// last answer was rolled back, or whose newest rollout the reader could not
+// establish (a revert it could not find, a directory it could not read): the
+// reader reports ErrNoReply, /screen posts the current screen and the removed
+// answer reaches no message.
+func TestOutboundScreenCodexRemovedAnswerIsNotSent(t *testing.T) {
+	const removed = "REMOVED-ANSWER"
+	for _, reason := range []string{
+		"the last codex turn was rolled back",
+		"a session directory could not be read",
+		"too many session files to search",
+	} {
+		f := newBridgeFixture(t)
+		a := f.add(t, "p1", "t1", "a", domain.StatusIdle)
+		a.Kind = "codex"
+		f.agents[a.Key] = a
+		f.herdr.SetScreen("p1", "current screen")
+		f.replies.Fail(a.Key, fmt.Errorf("%w: %s", domain.ErrNoReply, reason))
+		if err := f.out.Screen(f.ctx, a.Key, 0); err != nil {
+			t.Fatal(err)
+		}
+		sent := f.tg.Sent()
+		if len(sent) != 1 || sent[0].Text != "current screen" || !sent[0].Code {
+			t.Fatalf("%s: Sent = %+v, want the current screen", reason, sent)
+		}
+		for _, m := range sent {
+			if strings.Contains(m.Text, removed) {
+				t.Fatalf("%s: message %q carries the removed answer", reason, m.Text)
+			}
+		}
 	}
 }
 

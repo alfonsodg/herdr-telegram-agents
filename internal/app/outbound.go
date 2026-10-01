@@ -1303,10 +1303,11 @@ func (o *outbound) absorbEdit(key domain.Key, err error) error {
 // flag and the duplicate check because the operator asked for it. Errors
 // are returned so the caller can tell the operator.
 //
-// A bare /screen (lines == 0) on an OpenCode agent at its prompt tries the reply
-// source first and posts the reply rendered from Markdown: OpenCode draws a
-// multi-column TUI that comes out as scrambled text when
-// the screen is scraped row by row. /screen N stays a literal screen read on purpose: an
+// A bare /screen (lines == 0) on an OpenCode or Codex agent at its prompt
+// tries the reply source first and posts the reply rendered from Markdown:
+// OpenCode draws a multi-column TUI that comes out as scrambled text when the
+// screen is scraped row by row, and a Codex answer can be taller than the
+// screen. /screen N stays a literal screen read on purpose: an
 // explicit line count asks for the terminal, e.g. a permission dialog or
 // tool output the reply source has no representation of.
 func (o *outbound) Screen(ctx context.Context, key domain.Key, lines int) error {
@@ -1344,6 +1345,12 @@ func (o *outbound) Screen(ctx context.Context, key domain.Key, lines int) error 
 	return nil
 }
 
+// screenReplyKind reports whether a bare /screen posts the agent's reply
+// instead of the screen. OpenCode draws a multi-column TUI that scrapes into
+// scrambled text; a Codex answer can be taller than the screen and would be
+// cut. Claude Code and the other kinds keep the screen.
+func screenReplyKind(kind string) bool { return kind == "opencode" || kind == "codex" }
+
 // replyScreen tries the agent's reply source for a bare /screen post. ok
 // is false whenever the screen should be scraped exactly as before: no
 // reply source, the agent is gone or not at its prompt (a working agent's
@@ -1355,7 +1362,7 @@ func (o *outbound) replyScreen(ctx context.Context, key domain.Key) (string, boo
 		return "", false, ctx.Err()
 	}
 	agent, ok := o.agents(key)
-	if !ok || agent.Kind != "opencode" || !agent.Status.ReadyForInput() {
+	if !ok || !screenReplyKind(agent.Kind) || !agent.Status.ReadyForInput() {
 		return "", false, ctx.Err()
 	}
 	r, err := o.replies.LastReply(ctx, agent)

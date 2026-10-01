@@ -28,27 +28,100 @@ const (
 
 // gitSafeConfig switches off every program the repository's own config can
 // name for the read-only subcommands /git runs: the fsmonitor hook, hooks,
-// the pager. /git runs in whatever directory the agent works in, which may
-// be a repository nobody on this machine wrote.
+// the pager, the signature check. /git runs in whatever directory the agent
+// works in, which may be a repository nobody on this machine wrote. Filter
+// drivers have no global switch; gitFilterConfig adds them per name.
 var gitSafeConfig = []string{
 	"-c", "color.ui=never",
 	"-c", "core.fsmonitor=false",
 	"-c", "core.hooksPath=" + os.DevNull,
 	"-c", "core.pager=cat",
+	"-c", "log.showSignature=false",
 }
 
 // gitDiffing are the subcommands that render diffs and therefore accept
 // --no-ext-diff and --no-textconv (diff.external and textconv drivers).
 var gitDiffing = map[string]bool{"diff": true, "log": true, "show": true}
 
-// gitArgv builds the full argv for one run.
-func gitArgv(args []string) []string {
+// gitWorktree are the subcommands that compare the working tree. They get
+// --ignore-submodules=dirty: checking a submodule for local changes starts
+// a git status inside it, which reads the submodule's own config (and its
+// filter drivers) that the filter probe of the outer repository never sees.
+// A moved submodule commit is still reported.
+var gitWorktree = map[string]bool{"diff": true, "status": true}
+
+// gitFilterProbe lists the filter driver keys every config scope sets, one
+// "<scope>\t<key>" line each (--show-scope needs git 2.26). It only reads
+// config, so it runs no program the repository could name.
+var gitFilterProbe = []string{"config", "--show-scope", "--name-only", "--get-regexp", `^filter\.`}
+
+// gitUserScopes are the config scopes the machine's user wrote; their filter
+// drivers (git-lfs, typically) stay on. Every other scope, the repository's
+// .git/config and anything it includes in the first place, is neutralised.
+var gitUserScopes = map[string]bool{"system": true, "global": true, "command": true}
+
+// errGitFilterName refuses a filter name that cannot be passed through -c.
+var errGitFilterName = errors.New("git filter name not representable")
+
+// gitArgv builds the full argv for one run; filters are the repository's
+// filter driver names (gitFilterNames).
+func gitArgv(args []string, filters []string) []string {
 	argv := append([]string(nil), gitSafeConfig...)
-	if len(args) > 0 && gitDiffing[args[0]] {
-		argv = append(argv, args[0], "--no-ext-diff", "--no-textconv")
-		return append(argv, args[1:]...)
+	argv = append(argv, gitFilterConfig(filters)...)
+	if len(args) == 0 {
+		return argv
 	}
-	return append(argv, args...)
+	argv = append(argv, args[0])
+	if gitDiffing[args[0]] {
+		argv = append(argv, "--no-ext-diff", "--no-textconv")
+	}
+	if gitWorktree[args[0]] {
+		argv = append(argv, "--ignore-submodules=dirty")
+	}
+	return append(argv, args[1:]...)
+}
+
+// gitFilterConfig empties the clean, smudge and process commands of each
+// filter driver, so status and diff hash the working tree as it is instead
+// of running the driver; required=false keeps a required driver from
+// failing the run instead.
+func gitFilterConfig(filters []string) []string {
+	var argv []string
+	for _, name := range filters {
+		for _, key := range []string{"clean", "smudge", "process"} {
+			argv = append(argv, "-c", "filter."+name+"."+key+"=")
+		}
+		argv = append(argv, "-c", "filter."+name+".required=false")
+	}
+	return argv
+}
+
+// gitFilterNames parses the gitFilterProbe output into the distinct driver
+// names outside gitUserScopes. A name with "=" cannot be overridden through
+// -c (git splits key and value at the first "="), so it fails the run.
+func gitFilterNames(out string) ([]string, error) {
+	var names []string
+	seen := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		scope, key, ok := strings.Cut(strings.TrimRight(line, "\r"), "\t")
+		if !ok || gitUserScopes[scope] {
+			continue
+		}
+		rest, ok := strings.CutPrefix(key, "filter.")
+		dot := strings.LastIndexByte(rest, '.')
+		if !ok || dot <= 0 {
+			continue
+		}
+		name := rest[:dot]
+		if strings.ContainsAny(name, "=\x00") {
+			return nil, fmt.Errorf("%w: %q", errGitFilterName, name)
+		}
+		if !seen[name] {
+			seen[name] = true
+			names = append(names, name)
+		}
+	}
+	return names, nil
 }
 
 // errOutputCapped stops the stdout copy once gitMaxOutput is reached.
@@ -83,12 +156,13 @@ func (r *GitRunner) Run(ctx context.Context, dir string, args []string) (domain.
 	}
 	ctx, cancel := context.WithTimeout(ctx, r.timeout)
 	defer cancel()
-	argv := gitArgv(args)
+	filters, err := r.filters(ctx, bin, dir)
+	if err != nil {
+		return domain.GitResult{}, err
+	}
+	argv := gitArgv(args, filters)
 	r.log.Debug("[FIX] git safe argv", slog.String("argv", strings.Join(argv, " ")))
-	cmd := command(ctx, bin, argv...)
-	cmd.Dir = dir
-	cmd.WaitDelay = gitWaitDelay
-	cmd.Env = append(withoutEnv(os.Environ(), "GIT_EXTERNAL_DIFF"), "GIT_PAGER=cat", "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
+	cmd := r.command(ctx, bin, dir, argv)
 	stdout := &limitedWriter{max: r.maxBytes}
 	var stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = stdout, &stderr
@@ -121,6 +195,49 @@ func (r *GitRunner) Run(ctx context.Context, dir string, args []string) (domain.
 		return domain.GitResult{}, fmt.Errorf("git %s: %w", args[0], runErr)
 	}
 	return domain.GitResult{}, fmt.Errorf("git %s: %w: %s", args[0], runErr, firstLine(msg))
+}
+
+// command prepares one git child in dir with the pager, prompts and
+// GIT_EXTERNAL_DIFF off.
+func (r *GitRunner) command(ctx context.Context, bin, dir string, argv []string) *exec.Cmd {
+	cmd := command(ctx, bin, argv...)
+	cmd.Dir = dir
+	cmd.WaitDelay = gitWaitDelay
+	cmd.Env = append(withoutEnv(os.Environ(), "GIT_EXTERNAL_DIFF"), "GIT_PAGER=cat", "GIT_TERMINAL_PROMPT=0", "LC_ALL=C")
+	return cmd
+}
+
+// filters returns the filter drivers the repository in dir configures. Exit
+// status 1 means none; any other failure fails the run, since running
+// status or diff without the overrides could start a driver.
+func (r *GitRunner) filters(ctx context.Context, bin, dir string) ([]string, error) {
+	cmd := r.command(ctx, bin, dir, append(append([]string(nil), gitSafeConfig...), gitFilterProbe...))
+	stdout := &limitedWriter{max: r.maxBytes}
+	var stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = stdout, &stderr
+	runErr := cmd.Run()
+	var exitErr *exec.ExitError
+	switch {
+	case runErr == nil:
+	case errors.As(runErr, &exitErr) && exitErr.ExitCode() == 1 && stdout.buf.Len() == 0:
+		return nil, nil
+	case ctx.Err() != nil:
+		r.log.Warn("git filter probe timed out", slog.String("dir", dir))
+		return nil, context.DeadlineExceeded
+	default:
+		msg := firstLine(stderr.String())
+		r.log.Warn("[FIX] git filter probe failed; run refused", slog.String("dir", dir), slog.String("stderr", msg), slog.Any("err", runErr))
+		return nil, fmt.Errorf("git config: %w: %s", runErr, msg)
+	}
+	names, err := gitFilterNames(stdout.buf.String())
+	if err != nil {
+		r.log.Warn("[FIX] git filter probe found an unusable name; run refused", slog.String("dir", dir), slog.String("err", err.Error()))
+		return nil, err
+	}
+	if len(names) > 0 {
+		r.log.Debug("[FIX] repository filter drivers neutralised", slog.String("dir", dir), slog.String("filters", strings.Join(names, " ")))
+	}
+	return names, nil
 }
 
 // withoutEnv drops the named variables from env.

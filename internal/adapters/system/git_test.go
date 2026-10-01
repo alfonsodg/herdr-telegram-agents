@@ -167,3 +167,119 @@ func TestGitRunnerIgnoresRepositoryCommands(t *testing.T) {
 		t.Fatalf("repository command ran:\n%s", data)
 	}
 }
+
+// TestGitRunnerIgnoresFilterDrivers: git status and git diff HEAD run the
+// filter driver of a modified working-tree file when .gitattributes assigns
+// one, and a filter driver is a program named by the repository's config.
+// The long-running process driver takes precedence over clean and smudge,
+// so each kind gets its own repository. b.txt keeps its size, so status
+// has to hash it (through the filter) to tell it changed.
+func TestGitRunnerIgnoresFilterDrivers(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell scripts")
+	}
+	for _, keys := range [][]string{{"clean", "smudge"}, {"process"}} {
+		t.Run(strings.Join(keys, "+"), func(t *testing.T) {
+			dir := gitRepo(t)
+			marker := filepath.Join(t.TempDir(), "ran")
+			git := func(args ...string) {
+				t.Helper()
+				cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com"}, args...)...)
+				cmd.Dir = dir
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("git %v: %v\n%s", args, err, out)
+				}
+			}
+			if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("one\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			git("add", "b.txt")
+			git("commit", "-q", "-m", "second")
+			if err := os.WriteFile(filepath.Join(dir, "b.txt"), []byte("two\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, ".gitattributes"), []byte("*.txt filter=evil\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range keys {
+				git("config", "filter.evil."+key, "sh -c 'echo "+key+" >> "+marker+"; cat'")
+			}
+			r := NewGitRunner(nil)
+			ctx := context.Background()
+			for _, args := range [][]string{{"status", "--short", "--branch"}, {"diff", "HEAD"}, {"diff", "--cached"}, {"log", "--oneline", "--decorate", "-n", "10"}} {
+				res, err := r.Run(ctx, dir, args)
+				if data, rerr := os.ReadFile(marker); rerr == nil {
+					t.Fatalf("%v ran a filter driver:\n%s", args, data)
+				}
+				if err != nil {
+					t.Fatalf("%v: %v", args, err)
+				}
+				if args[0] == "status" && !strings.Contains(res.Output, " M b.txt") {
+					t.Fatalf("status without filters = %q", res.Output)
+				}
+				if args[0] == "diff" && args[1] == "HEAD" && !strings.Contains(res.Output, "+two") {
+					t.Fatalf("diff without filters = %q", res.Output)
+				}
+			}
+		})
+	}
+}
+
+// TestGitRunnerIgnoresSubmoduleFilters: status and diff recurse into a
+// submodule with a git status of their own, and that run reads the
+// submodule's config, whose filter drivers the outer probe never sees.
+func TestGitRunnerIgnoresSubmoduleFilters(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell scripts")
+	}
+	inner := gitRepo(t)
+	dir := gitRepo(t)
+	marker := filepath.Join(t.TempDir(), "ran")
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "protocol.file.allow=always"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git(dir, "submodule", "add", "-q", inner, "sub")
+	git(dir, "commit", "-q", "-m", "submodule")
+	sub := filepath.Join(dir, "sub")
+	if err := os.WriteFile(filepath.Join(sub, ".gitattributes"), []byte("*.txt filter=evil\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(sub, "config", "filter.evil.clean", "sh -c 'echo clean >> "+marker+"; cat'")
+	if err := os.WriteFile(filepath.Join(sub, "a.txt"), []byte("two\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	r := NewGitRunner(nil)
+	ctx := context.Background()
+	for _, args := range [][]string{{"status", "--short", "--branch"}, {"diff", "HEAD"}} {
+		_, err := r.Run(ctx, dir, args)
+		if data, rerr := os.ReadFile(marker); rerr == nil {
+			t.Fatalf("%v ran a submodule filter driver:\n%s", args, data)
+		}
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+	}
+}
+
+// TestGitFilterNames: drivers from the user's own scopes (git-lfs) stay on,
+// repository scopes are neutralised, and a name -c cannot carry refuses.
+func TestGitFilterNames(t *testing.T) {
+	out := "global\tfilter.lfs.process\nsystem\tfilter.sys.clean\nlocal\tfilter.evil.clean\nlocal\tfilter.evil.smudge\n" +
+		"worktree\tfilter.a.b.process\nlocal\tfilter.bare\ncommand\tfilter.cmd.clean\n"
+	names, err := gitFilterNames(out)
+	if err != nil || strings.Join(names, ",") != "evil,a.b" {
+		t.Fatalf("names = %v, %v", names, err)
+	}
+	if _, err := gitFilterNames("local\tfilter.x=y.clean\n"); !errors.Is(err, errGitFilterName) {
+		t.Fatalf("err = %v", err)
+	}
+	argv := strings.Join(gitArgv([]string{"status", "--short"}, names), " ")
+	if !strings.Contains(argv, "-c filter.a.b.process= -c filter.a.b.required=false status --ignore-submodules=dirty --short") {
+		t.Fatalf("argv = %v", argv)
+	}
+}

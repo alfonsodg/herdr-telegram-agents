@@ -8,6 +8,11 @@ completion posts arrive there; replies and command buttons go back to the
 agent. The bot can also ring an operator in a private chat when an agent needs
 an answer.
 
+**Hand your agent to someone else.** Any Telegram user can be given an agent
+for an hour, a day, a week or until you take it back: they watch it, or drive
+it, from their own private chat with the bot. They need no Herdr, no access to
+your machine and no seat in your group. See [Share an agent](#share-an-agent).
+
 <img src="docs/images/herdr-agents.png" alt="Herdr Agents panel" width="900">
 <img src="docs/images/telegram-topics.png" alt="Matching Telegram topics" width="900">
 
@@ -63,9 +68,35 @@ statuses. Operators can add read-only observers with `/observers`.
 See [Commands](docs/commands.md) for every command and attachment rule, and
 [Behavior](docs/behaviour.md) for sync, settings, access, and daemon details.
 
-For selected recipients, enable the bot's private Topics in BotFather and use
-`/share` in an owner agent topic. Recipients must first message the bot.
-Choose Read or Control and confirm the numeric recipient ID. See the
+## Share an agent
+
+Most remote controls for coding agents stop at "you, on your phone". This one
+also lets you lend a running agent, with its session, context and tools, to
+another person for a while:
+
+- **A teammate takes over** a task while you are offline, without a handover
+  call or a copy of your environment.
+- **A reviewer or client watches** the agent work live, read-only, and asks
+  for a screen when they want one.
+- **A colleague pairs with you** on the same session from their own phone,
+  each typing into it.
+
+The recipient only needs Telegram. They message your bot once, you run
+`/share` in the agent's topic, pick them, and choose:
+
+- **Read**: status, screens and the agent's new output in their private topic.
+- **Control**: they can also prompt the agent, answer its questions, press its
+  buttons, send keys and files, and stop it.
+- **How long**: one hour, one day, seven days, or until you revoke it.
+
+They see only the agents you shared, never your group or your other agents,
+and secrets are always masked in what they receive. `/shares` changes rights,
+suspends, resumes or revokes at any time. A grant ends by itself when it
+expires and is suspended when the agent's session changes. Control runs in
+your agent's session with its permissions on your machine, so grant it to
+people you would let type into that terminal.
+
+Enable Threaded Mode for the bot in BotFather first. Step-by-step: the
 [private sharing walkthrough](docs/commands.md#sharing-an-agent-privately).
 
 ## Check for updates

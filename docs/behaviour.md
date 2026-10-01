@@ -780,6 +780,10 @@ screen request. Durable first-contact registration happens before acknowledging
 Telegram updates; storage failures at this boundary can delay polling until
 storage recovers. At most 30 new contacts are registered per minute; further
 first contacts are refused without a reply and their updates acknowledged.
+`sharing.json` is capped at 8 MiB; a first contact that would not fit is
+refused like a full directory (its update acknowledged), never retried. Once the
+directory is full, the "directory is full" reply goes at most once per contact
+and to eight contacts in total per ten minutes.
 Private event admission allows eight requests per recipient and 32 overall per
 ten seconds for recipients with a grant; contacts without one share a separate
 budget of eight per ten seconds and get no congestion notice. A separate

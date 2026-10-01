@@ -2,9 +2,11 @@ package state_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -99,5 +101,51 @@ func TestSharingStoreWriteFailure(t *testing.T) {
 	}
 	if err := store.Save(ctx, s); err != nil {
 		t.Fatalf("retry: %v", err)
+	}
+}
+
+// fullDirectory returns a sharing state at MaxRecipients, every name made
+// of the longest allowed run of one rune.
+func fullDirectory(name rune) domain.SharingState {
+	s := domain.NewSharingState()
+	s.Revision = 1
+	at := time.Unix(100, 0).UTC()
+	long := strings.Repeat(string(name), domain.MaxRecipientName)
+	for id := int64(1); id <= domain.MaxRecipients; id++ {
+		s.Recipients[id] = domain.Recipient{ID: id, ChatID: id, Name: long, FirstSeen: at, LastSeen: at}
+	}
+	return s
+}
+
+// TestSharingStoreFitsFullDirectoryOfMarkupNames: a full directory whose
+// names are all '<' fits the size cap. With HTML escaping each '<' took six
+// bytes and Save refused the file at about 8,500 recipients.
+func TestSharingStoreFitsFullDirectoryOfMarkupNames(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+	store := state.NewSharingStore(dir, nil)
+	if _, err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(ctx, fullDirectory('<')); err != nil {
+		t.Fatalf("full directory refused: %v", err)
+	}
+	st, err := state.NewSharingStore(dir, nil).Load(ctx)
+	if err != nil || len(st.Recipients) != domain.MaxRecipients || st.Recipients[1].Name != strings.Repeat("<", domain.MaxRecipientName) {
+		t.Fatalf("roundtrip: %v", err)
+	}
+}
+
+// TestSharingStoreSizeLimitIsCapacity: a state over the byte cap is a
+// capacity condition callers can tell apart from a write failure.
+func TestSharingStoreSizeLimitIsCapacity(t *testing.T) {
+	ctx := context.Background()
+	store := state.NewSharingStore(t.TempDir(), nil)
+	if _, err := store.Load(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// U+2028 is escaped to six bytes whatever the encoder settings.
+	if err := store.Save(ctx, fullDirectory(' ')); !errors.Is(err, domain.ErrSharingStateFull) {
+		t.Fatalf("err = %v, want ErrSharingStateFull", err)
 	}
 }

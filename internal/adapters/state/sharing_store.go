@@ -97,14 +97,22 @@ func (s *SharingStore) Save(ctx context.Context, st domain.SharingState) error {
 	if st.Revision <= s.revision {
 		return errors.New("stale sharing state revision")
 	}
-	data, err := json.MarshalIndent(st, "", "  ")
-	if err != nil {
+	// No HTML escaping: the file is never embedded in markup, and escaping
+	// made each '<', '>' or '&' in a contact name cost six bytes. Readers
+	// accept both forms, so older binaries load these files unchanged.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(st); err != nil {
 		return errors.New("encode sharing state failed")
 	}
-	if len(data) > maxSharingBytes {
-		return errors.New("sharing state capacity exceeded")
+	// Encode ends with the newline, so this is the same bound Load applies.
+	if buf.Len() > maxSharingBytes {
+		s.log.Warn("[FIX] sharing state size limit reached; save refused as capacity", slog.Int("bytes", buf.Len()), slog.Int("limit", maxSharingBytes))
+		return fmt.Errorf("save sharing state: %w", domain.ErrSharingStateFull)
 	}
-	if err := writeAtomic(s.path, append(data, '\n'), 0o600); err != nil {
+	if err := writeAtomic(s.path, buf.Bytes(), 0o600); err != nil {
 		s.log.Warn("sharing state save failed", slog.Uint64("revision", st.Revision))
 		return fmt.Errorf("save sharing state: %w", err)
 	}

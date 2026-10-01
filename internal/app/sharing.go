@@ -128,6 +128,12 @@ func (s *Sharing) Register(ctx context.Context, id, chatID int64, name, username
 	if !exists {
 		if err := s.saveLocked(ctx, now); err != nil {
 			s.state = old
+			if errors.Is(err, domain.ErrSharingStateFull) {
+				// Retrying this contact can never fit; a plain error would
+				// leave its update unacknowledged and stall polling.
+				s.log.Warn("[FIX] new private contact refused: sharing state size limit reached")
+				return false, ErrSharingCapacity
+			}
 			return false, err
 		}
 		s.log.Info("private recipient registered", slog.Int64("recipient_id", id))

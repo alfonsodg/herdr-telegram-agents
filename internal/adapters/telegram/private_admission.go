@@ -67,6 +67,14 @@ const (
 	privateStrangerTotal = 8
 )
 
+// Capacity notices are sent on the synchronous poller, up to a second each.
+// Each actor gets one per window and all actors together at most
+// capacityNoticeTotal, so a full directory cannot become a polling stall.
+const (
+	capacityNoticeWindow = 10 * time.Minute
+	capacityNoticeTotal  = 8
+)
+
 type privateIngress struct {
 	window   time.Time
 	counts   map[int64]int
@@ -80,6 +88,10 @@ type privateIngress struct {
 	seen     map[int64]bool
 	first    map[int64]bool
 	order    []int64
+	// noticeWindow and noticed meter capacity notices; noticed holds at
+	// most capacityNoticeTotal actors.
+	noticeWindow time.Time
+	noticed      map[int64]bool
 }
 
 func (g *Gateway) SetPrivateRegistration(register PrivateRegistration) {
@@ -177,7 +189,7 @@ func (g *Gateway) onPrivate(ctx context.Context, _ *bot.Bot, u *models.Update) {
 	if ordinary {
 		if first, err := register(ctx, contact); err != nil {
 			g.log.Warn("private contact registration failed")
-			if errors.Is(err, domain.ErrRecipientCapacity) {
+			if errors.Is(err, domain.ErrRecipientCapacity) && g.capacityNoticeAllowed(contact.ActorID) {
 				// A bounded best-effort notice; never block owner polling.
 				noticeCtx, cancel := context.WithTimeout(ctx, time.Second)
 				defer cancel()
@@ -276,6 +288,24 @@ func (g *Gateway) admitPrivateEvent(actor int64) bool {
 	}
 	g.private.counts[actor]++
 	g.private.total++
+	return true
+}
+
+// capacityNoticeAllowed counts a capacity notice for actor against the
+// per-actor and global limits of the current window.
+func (g *Gateway) capacityNoticeAllowed(actor int64) bool {
+	g.private.mu.Lock()
+	defer g.private.mu.Unlock()
+	now := g.queue.cfg.Now()
+	if g.private.noticed == nil || now.Sub(g.private.noticeWindow) >= capacityNoticeWindow {
+		g.private.noticeWindow = now
+		g.private.noticed = map[int64]bool{}
+	}
+	if g.private.noticed[actor] || len(g.private.noticed) >= capacityNoticeTotal {
+		g.log.Debug("[FIX] capacity notice suppressed", "recipient_id", actor, "sent", len(g.private.noticed))
+		return false
+	}
+	g.private.noticed[actor] = true
 	return true
 }
 

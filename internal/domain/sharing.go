@@ -240,3 +240,8 @@ var ErrRegistrationBusy = errors.New("new private contacts arrive too fast")
 
 // ErrRecipientCapacity rejects a new contact without blocking owner polling.
 var ErrRecipientCapacity = errors.New("private recipient capacity reached")
+
+// ErrSharingStateFull reports that a snapshot would exceed the store's size
+// cap. It is a capacity condition, not a write failure: retrying the same
+// snapshot can never succeed.
+var ErrSharingStateFull = errors.New("sharing state size limit reached")

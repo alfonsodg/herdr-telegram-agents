@@ -3,6 +3,8 @@ package app_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +61,25 @@ func TestSharingCorruptionDisablesGuests(t *testing.T) {
 	}
 	if _, err := s.Register(context.Background(), 7, 7, "name", "", time.Unix(1000, 0)); !errors.Is(err, app.ErrSharingUnavailable) {
 		t.Fatal(err)
+	}
+}
+
+// TestSharingRegistrationStateFullIsCapacity: a first contact that would push
+// sharing.json past its size cap is refused as capacity, which the admission
+// path acknowledges. A generic error left the update unacknowledged and every
+// later getUpdates refetched and failed on it, owner updates included.
+func TestSharingRegistrationStateFullIsCapacity(t *testing.T) {
+	ctx := context.Background()
+	store := testkit.NewMemSharingStore()
+	s := app.NewSharing(ctx, store, nil)
+	store.Fail(fmt.Errorf("save: %w", domain.ErrSharingStateFull))
+	first, err := s.Register(ctx, 8, 8, strings.Repeat("<", domain.MaxRecipientName), "", time.Unix(1000, 0))
+	if first || !errors.Is(err, domain.ErrRecipientCapacity) {
+		t.Fatalf("first=%v err=%v, want ErrRecipientCapacity", first, err)
+	}
+	snapshot, _ := s.Snapshot()
+	if _, ok := snapshot.Recipients[8]; ok {
+		t.Fatal("refused contact retained as registered")
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -14,6 +15,11 @@ import (
 )
 
 const (
+	// heldMax bounds the promotions kept while the owner is unknown.
+	heldMax = 32
+	// clockSkew is how far a promotion may predate Bind and still count;
+	// Telegram's date and the local clock are not in sync.
+	clockSkew = 30 * time.Second
 	// setupRequestID tags the request_chat button so chat_shared replies can
 	// be told apart from anything else.
 	setupRequestID = 1
@@ -32,15 +38,19 @@ const (
 // administrator with the "Manage topics" right, and the resulting
 // chat_shared message names the group. The fallback watches my_chat_member
 // for a promotion done by hand. Pending updates are kept (deleteWebhook
-// without dropping) so a promotion done before setup is still seen.
+// without dropping), but once the wizard binds its code a promotion dated
+// before setup started is ignored (see admitMember): re-granting the right
+// after setup started produces a fresh one.
 type Probe struct {
 	api *bot.Bot
 	log *slog.Logger
 
 	mu     sync.Mutex
 	botID  int64
-	code   string // one-time setup code from the wizard's link; "" = unbound
-	owner  int64  // the user who sent the code; only they may choose
+	code   string                      // one-time setup code from the wizard's link; "" = unbound
+	owner  int64                       // the user who sent the code; only they may choose
+	since  int64                       // unix seconds of Bind; older promotions never count
+	held   []*models.ChatMemberUpdated // promotions seen before the owner is known
 	seen   map[int64]bool
 	out    chan domain.GroupCandidate
 	cancel context.CancelFunc // set by Candidates
@@ -138,28 +148,64 @@ func (p *Probe) stop() {
 // Bind sets the one-time code the wizard put into its link
 // (domain.SetupLink). From then on only the user who sends
 // "/start setup_<code>" gets the group button and may choose the group;
-// everyone else who finds the bot during setup is ignored.
+// everyone else who finds the bot during setup is ignored. The same holds
+// for promotions by hand: until the owner is known they are held, then only
+// the owner's count, and one dated before Bind (a pending update) never does.
 func (p *Probe) Bind(code string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.code, p.owner = code, 0
+	p.code, p.owner, p.held = code, 0, nil
+	p.since = time.Now().Add(-clockSkew).Unix()
 }
 
 // allowPrivate reports whether a private message may drive setup, binding
-// the sender as the owner when it carries the code.
-func (p *Probe) allowPrivate(m *models.Message) bool {
+// the sender as the owner when it carries the code. On binding it returns
+// the promotions held so far for re-evaluation.
+func (p *Probe) allowPrivate(m *models.Message) (bool, []*models.ChatMemberUpdated) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	switch {
+	case p.code == "":
+		return true, nil
+	case p.owner != 0:
+		return m.From.ID == p.owner, nil
+	case m.ChatShared == nil && m.Text == "/start "+domain.SetupStartPrefix+p.code:
+		p.owner = m.From.ID
+		held := p.held
+		p.held = nil
+		return true, held
+	}
+	return false, nil
+}
+
+// admitMember decides whether a promotion may become a candidate now.
+// Before Bind every promotion may; after Bind one older than setup is
+// dropped, one seen before the owner is known is held, and afterwards only
+// the owner's is admitted. Without this, anyone who promoted the bot in
+// their own forum before the link holder showed up became the only
+// candidate and the operator.
+func (p *Probe) admitMember(cm *models.ChatMemberUpdated) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	switch {
 	case p.code == "":
 		return true
-	case p.owner != 0:
-		return m.From.ID == p.owner
-	case m.ChatShared == nil && m.Text == "/start "+domain.SetupStartPrefix+p.code:
-		p.owner = m.From.ID
-		return true
+	case int64(cm.Date) < p.since:
+		p.log.Info("[FIX] setup probe: promotion from before setup started ignored", slog.Int64("chat_id", cm.Chat.ID), slog.Int64("from_id", cm.From.ID))
+		return false
+	case p.owner == 0:
+		if len(p.held) >= heldMax {
+			p.log.Warn("[FIX] setup probe: too many promotions before the setup link was opened, one dropped", slog.Int64("chat_id", cm.Chat.ID), slog.Int64("from_id", cm.From.ID))
+			return false
+		}
+		p.held = append(p.held, cm)
+		p.log.Info("[FIX] setup probe: promotion held until the setup link is opened", slog.Int64("chat_id", cm.Chat.ID), slog.Int64("from_id", cm.From.ID))
+		return false
+	case cm.From.ID != p.owner:
+		p.log.Info("[FIX] setup probe: promotion by another user than the one running setup ignored", slog.Int64("chat_id", cm.Chat.ID), slog.Int64("from_id", cm.From.ID))
+		return false
 	}
-	return false
+	return true
 }
 
 // Process feeds one update to the probe's handlers, bypassing polling. It
@@ -172,7 +218,8 @@ func (p *Probe) Process(ctx context.Context, u *models.Update) {
 // the group choice, anything else (typically /start) gets the button.
 func (p *Probe) onPrivate(ctx context.Context, b *bot.Bot, u *models.Update) {
 	m := u.Message
-	if !p.allowPrivate(m) {
+	ok, held := p.allowPrivate(m)
+	if !ok {
 		p.log.Info("[FIX] setup probe: private message from a user without the setup code ignored", slog.Int64("from_id", m.From.ID))
 		return
 	}
@@ -184,6 +231,13 @@ func (p *Probe) onPrivate(ctx context.Context, b *bot.Bot, u *models.Update) {
 	p.reply(ctx, b, m.Chat.ID,
 		"Choose the forum group to mirror Herdr agents into. Telegram will add me there as an administrator with the \"Manage topics\" right.",
 		chooseGroupKeyboard())
+	for _, cm := range held {
+		if cm.From.ID != m.From.ID {
+			p.log.Info("[FIX] setup probe: held promotion by another user than the one running setup ignored", slog.Int64("chat_id", cm.Chat.ID), slog.Int64("from_id", cm.From.ID))
+			continue
+		}
+		p.evaluateMember(ctx, b, cm)
+	}
 }
 
 // chooseGroupKeyboard builds the request_chat button. The bot asks for
@@ -261,13 +315,15 @@ func (p *Probe) onMember(ctx context.Context, b *bot.Bot, u *models.Update) {
 			slog.Int64("chat_id", cm.Chat.ID), slog.Int64("from_id", cm.From.ID))
 		return
 	}
-	p.mu.Lock()
-	owner := p.owner
-	p.mu.Unlock()
-	if owner != 0 && cm.From.ID != owner {
-		p.log.Info("[FIX] setup probe: promotion by another user than the one running setup ignored", slog.Int64("chat_id", cm.Chat.ID), slog.Int64("from_id", cm.From.ID))
+	if !p.admitMember(cm) {
 		return
 	}
+	p.evaluateMember(ctx, b, cm)
+}
+
+// evaluateMember reports an admitted promotion when it grants topic rights
+// in a forum.
+func (p *Probe) evaluateMember(ctx context.Context, b *bot.Bot, cm *models.ChatMemberUpdated) {
 	if !canManageTopics(cm.NewChatMember) {
 		p.log.Debug("setup probe: membership change without topic rights",
 			slog.Int64("chat_id", cm.Chat.ID), slog.String("status", string(cm.NewChatMember.Type)))

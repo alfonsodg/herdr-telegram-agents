@@ -33,7 +33,9 @@ Go toolchain on the machine where it is installed.
    the bot to the group with **Manage topics**, **Delete messages**, and
    **Pin messages**. The link carries a one-time code: only the account that
    opens it can select the group, and it becomes an operator. Promote the bot
-   as yourself, not as an anonymous admin.
+   as yourself, not as an anonymous admin. A promotion by hand counts only
+   when it comes from that account and happens after setup started; one done
+   earlier is ignored, so grant the right again.
 4. Confirm the group in the popup. The daemon starts and later starts with
    Herdr automatically.
 5. Mute the group if frequent topic icon notices are distracting. Agent

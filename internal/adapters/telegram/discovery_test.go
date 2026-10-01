@@ -20,6 +20,7 @@ func promotion(chatID int64, title string, isForum bool, from models.User, right
 	return &models.Update{ID: 7, MyChatMember: &models.ChatMemberUpdated{
 		Chat: models.Chat{ID: chatID, Type: models.ChatTypeSupergroup, Title: title, IsForum: isForum},
 		From: from,
+		Date: int(time.Now().Unix()),
 		NewChatMember: models.ChatMember{
 			Type:          models.ChatMemberTypeAdministrator,
 			Administrator: &models.ChatMemberAdministrator{CanManageTopics: rights},
@@ -316,5 +317,56 @@ func TestProbeBindsToSetupCode(t *testing.T) {
 	p.Process(ctx, chatShared(alex, 1, -100, "Agents"))
 	if c := recvCandidate(t, ch); c.FromID != 7 {
 		t.Fatalf("candidate = %+v", c)
+	}
+}
+
+// TestProbeHoldsPromotionsUntilOwnerKnown: after Bind and before the link
+// holder sends /start setup_<code>, any user could add the bot as an
+// admin with "Manage topics" to their own forum and become the only
+// candidate (and the operator). Promotions in that window are held and
+// re-evaluated once the owner is known: only the owner's count, in either
+// order, and a promotion dated before setup started never counts.
+func TestProbeHoldsPromotionsUntilOwnerKnown(t *testing.T) {
+	p, api, _ := newProbe(t)
+	ctx, cancel := context.WithCancel(ctxT(t))
+	defer cancel()
+	if _, err := p.Identity(ctx); err != nil {
+		t.Fatal(err)
+	}
+	ch, err := p.Candidates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Bind("c0de")
+	alex := models.User{ID: 7, Username: "alex"}
+	mallory := models.User{ID: 66, Username: "mallory"}
+
+	// Before the owner is known: the stranger's promotion is not a candidate.
+	p.Process(ctx, promotion(-555, "Agents", true, mallory, true))
+	noCandidate(t, ch)
+	// The owner promoted the bot by hand before opening the link.
+	p.Process(ctx, promotion(-100, "Mine", true, alex, true))
+	noCandidate(t, ch)
+	// A promotion from before setup started (a pending update) never counts.
+	stale := promotion(-777, "Old", true, alex, true)
+	stale.MyChatMember.Date = int(time.Now().Add(-2 * time.Hour).Unix())
+	p.Process(ctx, stale)
+	noCandidate(t, ch)
+
+	p.Process(ctx, privateText(alex, "/start setup_c0de"))
+	if c := recvCandidate(t, ch); c.ChatID != -100 || c.FromID != 7 {
+		t.Fatalf("candidate = %+v, want the owner's group", c)
+	}
+	noCandidate(t, ch)
+
+	// After the owner is known: the stranger is still ignored, the owner counts.
+	p.Process(ctx, promotion(-556, "Agents 2", true, mallory, true))
+	noCandidate(t, ch)
+	p.Process(ctx, promotion(-101, "Mine 2", true, alex, true))
+	if c := recvCandidate(t, ch); c.ChatID != -101 || c.FromID != 7 {
+		t.Fatalf("candidate = %+v", c)
+	}
+	if n := len(api.callsOf("getChat")); n != 0 {
+		t.Fatalf("getChat calls = %d, want none for forum-flagged updates", n)
 	}
 }

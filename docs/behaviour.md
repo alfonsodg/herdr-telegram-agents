@@ -736,7 +736,10 @@ pager=on|off|unreachable telegram=ready` while polling has started.
 `LOG_LEVEL=debug|info|warn|error` in Herdr's environment overrides the level
 saved in `config.json` (default `info`). The daemon writes JSON lines to
 `daemon.log` in the state dir; the logs action renders them as
-`15:04:05 INFO message key=value`. Delete `mapping.json` while the daemon is
+`15:04:05 INFO message key=value`. Control characters (ESC, BEL, C1) and bidi
+overrides in a line, for example in a stranger's Telegram name, are shown
+escaped (`\x1b`, `\u202e`) and never reach the terminal.
+Delete `mapping.json` while the daemon is
 stopped to forget every topic; the next start creates fresh ones and leaves the
 old topics untouched. Entries of exited agents are no longer dropped by age;
 the [topic cleanup](#topic-cleanup) deletes the topic and the entry together.

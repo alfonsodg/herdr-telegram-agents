@@ -11,9 +11,11 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/permgps/herdr-telegram-agents/internal/compose"
 )
@@ -198,15 +200,18 @@ func lastLines(f *os.File, n int) ([]string, error) {
 }
 
 // renderLogLine turns one slog JSON line into `15:04:05 LEVEL msg k=v`.
-// Lines that are not JSON objects are printed unchanged.
+// Lines that are not JSON objects are printed as they are. Either way
+// control and bidi characters are escaped (escapeUnsafe): the log holds
+// strangers' Telegram names, and decoding the JSON turns \u001b back into
+// a real ESC.
 func renderLogLine(line string) string {
 	line = strings.TrimRight(line, "\r")
 	if !strings.HasPrefix(line, "{") {
-		return line
+		return escapeUnsafe(line)
 	}
 	var rec map[string]any
 	if err := json.Unmarshal([]byte(line), &rec); err != nil {
-		return line
+		return escapeUnsafe(line)
 	}
 	ts := ""
 	if raw, ok := rec["time"].(string); ok {
@@ -229,17 +234,17 @@ func renderLogLine(line string) string {
 	sort.Strings(keys)
 	var b strings.Builder
 	if ts != "" {
-		b.WriteString(ts)
+		b.WriteString(escapeUnsafe(ts))
 		b.WriteByte(' ')
 	}
 	if level != "" {
-		b.WriteString(level)
+		b.WriteString(escapeUnsafe(level))
 		b.WriteByte(' ')
 	}
-	b.WriteString(msg)
+	b.WriteString(escapeUnsafe(msg))
 	for _, k := range keys {
 		b.WriteByte(' ')
-		b.WriteString(k)
+		b.WriteString(escapeUnsafe(k))
 		b.WriteByte('=')
 		b.WriteString(renderValue(rec[k]))
 	}
@@ -249,8 +254,8 @@ func renderLogLine(line string) string {
 func renderValue(v any) string {
 	switch x := v.(type) {
 	case string:
-		if strings.ContainsAny(x, " \t\"") {
-			return fmt.Sprintf("%q", x)
+		if strings.ContainsAny(x, " \t\"") || strings.ContainsFunc(x, unsafeRune) {
+			return strconv.Quote(x)
 		}
 		return x
 	case float64:
@@ -263,8 +268,42 @@ func renderValue(v any) string {
 	default:
 		data, err := json.Marshal(x)
 		if err != nil {
-			return fmt.Sprint(x)
+			return escapeUnsafe(fmt.Sprint(x))
 		}
-		return string(data)
+		return escapeUnsafe(string(data))
 	}
+}
+
+// unsafeRune reports runes a terminal may act on instead of printing: C0,
+// DEL and C1 controls (ESC starts sequences that retitle the window or
+// clear the screen; C1 CSI does the same in one rune) and the bidi
+// controls that reorder what follows.
+func unsafeRune(r rune) bool {
+	switch {
+	case unicode.IsControl(r):
+		return true
+	case r == '\u061c', r == '\u200e', r == '\u200f',
+		r >= '\u202a' && r <= '\u202e', r >= '\u2066' && r <= '\u2069':
+		return true
+	}
+	return false
+}
+
+// escapeUnsafe replaces every unsafeRune with a visible \xNN or \uNNNN.
+func escapeUnsafe(s string) string {
+	if !strings.ContainsFunc(s, unsafeRune) {
+		return s
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case !unsafeRune(r):
+			b.WriteRune(r)
+		case r < 0x80:
+			fmt.Fprintf(&b, `\x%02x`, r)
+		default:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		}
+	}
+	return b.String()
 }

@@ -2,12 +2,14 @@ package cli
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
 )
 
 func TestRenderLogLine(t *testing.T) {
@@ -23,6 +25,34 @@ func TestRenderLogLine(t *testing.T) {
 		if got := renderLogLine(tt.in); got != tt.want {
 			t.Errorf("renderLogLine(%q)\n got %q\nwant %q", tt.in, got, tt.want)
 		}
+	}
+}
+
+// TestRenderLogLineNeutralizesControls: slog JSON escapes ESC as \u001b and
+// decoding turns it back into a real ESC. Strangers' Telegram names are
+// logged at Info, so a name like "x\x1b]0;pwned\x07\x1b[2J" must not reach
+// the terminal as escape sequences (title change, screen clear), in the
+// message, in values, in keys or in a line that is not JSON.
+func TestRenderLogLineNeutralizesControls(t *testing.T) {
+	evil := "x\x1b]0;pwned\x07\x1b[2J\u009b31m\x7f\u202eevil\u2066"
+	var buf strings.Builder
+	log := slog.New(slog.NewJSONHandler(&buf, nil))
+	log.Info("stranger "+evil, slog.String("name", evil), slog.String("plain", "ok"), slog.Any("nested", map[string]string{"k": evil}), slog.String("key"+evil, "v"))
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	lines = append(lines, "raw "+evil)
+	for _, line := range lines {
+		got := renderLogLine(line)
+		for _, r := range got {
+			if unicode.IsControl(r) || r == '\u202e' || r == '\u2066' {
+				t.Fatalf("rendered line holds %U: %q", r, got)
+			}
+		}
+		if !strings.Contains(got, "pwned") {
+			t.Fatalf("rendered line lost the text: %q", got)
+		}
+	}
+	if got := renderLogLine(lines[0]); !strings.Contains(got, "plain=ok") {
+		t.Fatalf("safe value changed: %q", got)
 	}
 }
 

@@ -200,3 +200,41 @@ func TestAlbumRevokedBeforeSettlement(t *testing.T) {
 		t.Fatal("revoked album reached inbox or agent")
 	}
 }
+
+// A session change in the shared pane is a re-grant boundary: from the
+// pane.updated that names the new session until the next snapshot (which
+// may keep failing), the grant's key must not authorize input or reads,
+// because every Herdr effect targets only the pane id.
+func TestPrivateGrantDeniedAfterSessionSwapBeforeSnapshot(t *testing.T) {
+	f := newPrivateFixture(t, domain.ShareControl)
+	ctx := context.Background()
+	reg := app.NewRegistry(f.h, testkit.NewFakeClock(f.now), nil)
+	shared := domain.Agent{Key: f.g.Key, Name: "agent", Status: domain.StatusIdle, Kind: "claude"}
+	f.h.SetAgents([]domain.Agent{shared})
+	if _, err := reg.Snapshot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	f.s.Agent = reg.Agent
+	f.p.Agent = reg.Agent
+	f.h.SetScreen("p", "new session secrets")
+	f.h.FailList(domain.ErrDisconnected)
+	swapped := shared
+	swapped.Key.SessionDigest = "other-session"
+	reg.Apply(domain.HerdrEvent{Kind: domain.PaneUpdated, PaneID: "p", Agent: &swapped})
+	if _, err := reg.Snapshot(ctx); err == nil {
+		t.Fatal("snapshot unexpectedly succeeded")
+	}
+	idle := domain.Agent{Kind: "claude", Status: domain.StatusIdle}
+	reg.Apply(domain.HerdrEvent{Kind: domain.PaneAgentStatusChanged, PaneID: "p", Agent: &idle})
+	for _, text := range []string{"hello new session", "/screen", "/keys enter"} {
+		if err := f.p.Handle(ctx, domain.PrivateMessage{Contact: domain.PrivateContact{ActorID: 10}, Address: f.origin.Address, MessageID: 900, Text: text}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(f.h.Prompts())+len(f.h.Keys())+len(f.h.Reads()) != 0 {
+		t.Fatalf("stale grant reached the new session: prompts=%v keys=%v reads=%v", f.h.Prompts(), f.h.Keys(), f.h.Reads())
+	}
+	if _, _, d := f.s.Begin(ctx, f.origin, domain.ShareScreen); d.Allowed {
+		t.Fatal("stale grant still authorizes screen reads")
+	}
+}

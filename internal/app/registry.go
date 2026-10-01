@@ -35,6 +35,12 @@ type AgentEvent struct {
 // status and pane-update events are applied immediately so the topic
 // reacts before the next snapshot, and structural events (a pane appears,
 // closes or exits, an agent is detected or released) schedule a snapshot.
+//
+// An event that shows a known key is no longer the pane's agent (a new
+// session in the same pane, a close, an exit, a release) retires that key
+// at once: Agent stops vouching for it while Live keeps it, so private
+// sharing, which authorizes through Agent and acts on the pane id, cannot
+// reach the next session before a snapshot reconciles.
 type Registry struct {
 	herdr domain.HerdrGateway
 	clock domain.Clock
@@ -48,6 +54,7 @@ type Registry struct {
 	mu        sync.Mutex
 	agents    map[domain.Key]domain.Agent
 	byPane    map[string]domain.Key
+	retired   map[domain.Key]bool // keys an event superseded; cleared by snapshots
 	lastOK    time.Time
 	lastErr   error
 	lastErrAt time.Time
@@ -68,6 +75,7 @@ func NewRegistry(herdr domain.HerdrGateway, clock domain.Clock, log *slog.Logger
 		Coalesce: snapshotCoalesce,
 		agents:   map[domain.Key]domain.Agent{},
 		byPane:   map[string]domain.Key{},
+		retired:  map[domain.Key]bool{},
 		request:  make(chan struct{}, 1),
 	}
 }
@@ -85,10 +93,14 @@ func (r *Registry) Live() []domain.Agent {
 }
 
 // Agent returns the current view of one live agent; ok is false once the
-// agent has exited. It is safe from any goroutine.
+// agent has exited, and from the moment an event retires its key until a
+// snapshot lists it again. It is safe from any goroutine.
 func (r *Registry) Agent(key domain.Key) (domain.Agent, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.retired[key] {
+		return domain.Agent{}, false
+	}
 	a, ok := r.agents[key]
 	return a, ok
 }
@@ -165,6 +177,7 @@ func (r *Registry) applySnapshot(agents []domain.Agent, now time.Time) ([]AgentE
 		}
 	}
 	r.agents = next
+	clear(r.retired)
 	r.byPane = make(map[string]domain.Key, len(next))
 	panes := make([]string, 0, len(next))
 	for key := range next {
@@ -268,16 +281,37 @@ func (r *Registry) Apply(ev domain.HerdrEvent) (events []AgentEvent, structural 
 		return r.applyStatus(ev)
 	case domain.PaneUpdated:
 		return r.applyUpdate(ev)
-	case domain.StreamReset, domain.PaneAgentDetected, domain.PaneClosed, domain.PaneExited, domain.TabRenamed, domain.WorkspaceRenamed:
+	case domain.PaneClosed, domain.PaneExited:
+		r.retirePane(ev.PaneID, string(ev.Kind))
+		return nil, true
+	case domain.PaneAgentDetected:
+		if ev.Released {
+			r.retirePane(ev.PaneID, "released")
+		}
+		return nil, true
+	case domain.StreamReset, domain.TabRenamed, domain.WorkspaceRenamed:
 		return nil, true
 	default:
 		return nil, false
 	}
 }
 
+// retirePane retires the key a pane currently holds, if any. The caller
+// holds r.mu.
+func (r *Registry) retirePane(paneID, reason string) {
+	key, ok := r.byPane[paneID]
+	if !ok || r.retired[key] {
+		return
+	}
+	r.retired[key] = true
+	r.log.Info("[FIX] agent key retired until the next snapshot", slog.String("key", key.String()), slog.String("reason", reason))
+}
+
 func (r *Registry) applyStatus(ev domain.HerdrEvent) ([]AgentEvent, bool) {
 	key, ok := r.byPane[ev.PaneID]
-	if !ok || ev.Agent == nil {
+	// A retired key no longer names the pane's agent; the status belongs
+	// to whatever replaced it, which only a snapshot can introduce.
+	if !ok || ev.Agent == nil || r.retired[key] {
 		return nil, true
 	}
 	old := r.agents[key]
@@ -304,7 +338,14 @@ func (r *Registry) applyUpdate(ev domain.HerdrEvent) ([]AgentEvent, bool) {
 	old, ok := r.agents[a.Key]
 	if !ok {
 		// New key (new agent, or a replacement in a known pane): let the
-		// snapshot introduce it so the old key is retired in the same pass.
+		// snapshot introduce it so the old key leaves in the same pass, and
+		// retire the pane's old key now, so nothing authorizes the next
+		// session through it in the meantime.
+		r.retirePane(a.Key.PaneID, "replaced")
+		return nil, true
+	}
+	if r.retired[a.Key] {
+		// Only a snapshot brings a retired key back.
 		return nil, true
 	}
 	// Pane events carry no workspace or tab labels and no agent name

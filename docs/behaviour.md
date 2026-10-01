@@ -757,7 +757,13 @@ default.
 A mirror binds a numeric recipient, private chat/topic, grant revision and exact
 agent session. It cannot follow a replacement session merely because its name
 or working directory matches. An exited session rejects input; verified resume
-can reuse the topic. Incomplete session identity requires owner reapproval after
+can reuse the topic. The moment Herdr reports a different session in the pane,
+or the pane closes, exits or releases its agent, the old session stops
+authorizing prompts, keys and screen reads, even before the next agent list
+confirms the change and while that list keeps failing; a list that still shows
+the old session restores it. The owner's group topic treats the old session
+the same way in that window (a message gets "agent has exited") and follows
+the agent at the next list as usual. Incomplete session identity requires owner reapproval after
 restart. Private topics are never closed or reopened through supergroup APIs.
 The existing exited-topic retention setting can remove old exited mirrors;
 policy records remain to prevent stale work from regaining access.

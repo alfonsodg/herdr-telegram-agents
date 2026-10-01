@@ -246,6 +246,50 @@ func TestDaemonLiveRestartReusesSameSessionTopic(t *testing.T) {
 	assertCalls(t, f.tg, "rights", started1, stopping)
 }
 
+// TestDaemonPaneUpdatedRestartKeepsOwnerTopic: a pane.updated that names a
+// new key retires the old one in the registry right away (private sharing
+// must not reach the next session through it); the owner's topic still
+// follows the agent once the coalesced snapshot reconciles, and a topic
+// message prompts the pane again.
+func TestDaemonPaneUpdatedRestartKeepsOwnerTopic(t *testing.T) {
+	f := newDaemon(t)
+	oldKey := sessionKey("p1", "term-old", "session-live")
+	oldAgent := domain.Agent{Key: oldKey, Name: "reviewer", Kind: "codex", Cwd: "/work/repo", Status: domain.StatusIdle}
+	topic, err := f.tg.CreateTopic(context.Background(), "reviewer", domain.StatusIdle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.rec.Mapping().Link(oldKey, topic, oldAgent, t0)
+	f.tg.Reset()
+	f.herdr.SetAgents([]domain.Agent{oldAgent})
+	f.start(t)
+	f.waitCalls(t, 2)
+	waitFor(t, "initial bridge event", func() bool { return f.bridge.Handled() >= 1 })
+
+	current := oldAgent
+	current.Key.TerminalID = "term-new"
+	f.herdr.SetAgents([]domain.Agent{current})
+	f.herdr.Push(domain.HerdrEvent{Kind: domain.PaneUpdated, PaneID: "p1", Agent: &current})
+	waitFor(t, "coalesced snapshot", func() bool {
+		f.clock.Advance(time.Second)
+		return f.herdr.ListCalls() >= 2
+	})
+	waitFor(t, "restart appeared and gone events", func() bool { return f.bridge.Handled() >= 3 })
+
+	f.tg.Push(domain.TopicMessage{ThreadID: topic.ThreadID, MessageID: 5, FromID: 1, Text: "run the tests"})
+	waitFor(t, "prompt", func() bool { return len(f.herdr.Prompts()) == 1 })
+	if p := f.herdr.Prompts()[0]; p != "p1: run the tests" {
+		t.Fatalf("prompt = %q", p)
+	}
+	if err := f.stop(t); err != nil {
+		t.Fatalf("Run = %v", err)
+	}
+	entry, ok := f.rec.Mapping().TopicFor(current.Key)
+	if !ok || entry.ThreadID != topic.ThreadID || len(f.rec.Mapping().Topics) != 1 {
+		t.Fatalf("mapping after pane.updated restart = %+v ok=%v entries=%d, want thread %d", entry, ok, len(f.rec.Mapping().Topics), topic.ThreadID)
+	}
+}
+
 func TestDaemonRightsLostAndRegained(t *testing.T) {
 	f := newDaemon(t)
 	f.tg.SetRights(domain.Rights{IsForum: true, IsAdmin: true, CanManageTopics: false}, nil)

@@ -336,6 +336,100 @@ func TestRegistryRunIntervalAndStatusFastPath(t *testing.T) {
 	}
 }
 
+// An event that shows a known pane under a new session, closed, exited or
+// released retires its key at once: Agent stops vouching for it (sharing
+// authorizes through Agent) while Live keeps it, so the next snapshot still
+// diffs the replacement against it and the topic can move. Status events
+// for the pane no longer touch the retired key.
+func TestRegistryQuarantinesSupersededKeyUntilSnapshot(t *testing.T) {
+	ctx := context.Background()
+	swapped := sessionAgent("p1", "t1", "second")
+	for _, tc := range []struct {
+		name string
+		ev   domain.HerdrEvent
+	}{
+		{"session swap", domain.HerdrEvent{Kind: domain.PaneUpdated, PaneID: "p1", Agent: &swapped}},
+		{"closed", domain.HerdrEvent{Kind: domain.PaneClosed, PaneID: "p1"}},
+		{"exited", domain.HerdrEvent{Kind: domain.PaneExited, PaneID: "p1"}},
+		{"released", domain.HerdrEvent{Kind: domain.PaneAgentDetected, PaneID: "p1", Released: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := testkit.NewFakeHerdr(nil)
+			r := app.NewRegistry(h, testkit.NewFakeClock(t0), nil)
+			first := sessionAgent("p1", "t1", "first")
+			h.SetAgents([]domain.Agent{first})
+			if _, err := r.Snapshot(ctx); err != nil {
+				t.Fatal(err)
+			}
+			h.FailList(domain.ErrDisconnected)
+			if evs, structural := r.Apply(tc.ev); !structural || len(evs) != 0 {
+				t.Fatalf("retiring event = %v, structural=%v", kinds(evs), structural)
+			}
+			if _, err := r.Snapshot(ctx); err == nil {
+				t.Fatal("snapshot unexpectedly succeeded")
+			}
+			if _, ok := r.Agent(first.Key); ok {
+				t.Fatal("retired key still authoritative before a successful snapshot")
+			}
+			if live := r.Live(); len(live) != 1 || live[0].Key != first.Key {
+				t.Fatalf("Live dropped the retired key before the snapshot: %v", live)
+			}
+			idle := domain.Agent{Kind: "claude", Status: domain.StatusIdle}
+			if evs, structural := r.Apply(domain.HerdrEvent{Kind: domain.PaneAgentStatusChanged, PaneID: "p1", Agent: &idle}); !structural || len(evs) != 0 {
+				t.Fatalf("status applied to a retired key: %v structural=%v", kinds(evs), structural)
+			}
+			if evs, _ := r.Apply(domain.HerdrEvent{Kind: domain.PaneUpdated, PaneID: "p1", Agent: &first}); len(evs) != 0 {
+				t.Fatalf("pane.updated revived a retired key: %v", kinds(evs))
+			}
+			if _, ok := r.Agent(first.Key); ok {
+				t.Fatal("retired key revived by an event")
+			}
+
+			h.FailList(nil)
+			h.SetAgents([]domain.Agent{swapped})
+			evs, err := r.Snapshot(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The same events as without the retirement: the reconciler
+			// still sees the old key leave.
+			if want := []string{"gone:" + first.Key.String(), "appeared:" + swapped.Key.String()}; !equal(kinds(evs), want) {
+				t.Fatalf("snapshot after retirement = %v, want %v", kinds(evs), want)
+			}
+			if _, ok := r.Agent(swapped.Key); !ok {
+				t.Fatal("replacement not live after the snapshot")
+			}
+			if _, ok := r.Agent(first.Key); ok {
+				t.Fatal("retired key live after the snapshot")
+			}
+		})
+	}
+}
+
+// A snapshot that still lists the key is the source of truth and lifts the
+// quarantine.
+func TestRegistrySnapshotLiftsQuarantine(t *testing.T) {
+	ctx := context.Background()
+	h := testkit.NewFakeHerdr(nil)
+	r := app.NewRegistry(h, testkit.NewFakeClock(t0), nil)
+	first := sessionAgent("p1", "t1", "first")
+	h.SetAgents([]domain.Agent{first})
+	if _, err := r.Snapshot(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r.Apply(domain.HerdrEvent{Kind: domain.PaneExited, PaneID: "p1"})
+	evs, err := r.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(evs) != 0 {
+		t.Fatalf("unchanged snapshot emitted %v", kinds(evs))
+	}
+	if _, ok := r.Agent(first.Key); !ok {
+		t.Fatal("snapshot did not lift the quarantine")
+	}
+}
+
 // waitTimers blocks until the fake clock holds at least n armed timers.
 func waitTimers(t *testing.T, clock *testkit.FakeClock, n int) {
 	t.Helper()

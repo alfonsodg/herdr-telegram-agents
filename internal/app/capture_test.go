@@ -155,9 +155,12 @@ func TestCaptureVisibleThenRecentWithOlderPrefixKeepsHistoryContinuous(t *testin
 		scriptedRead{source: domain.ScreenRecent, screen: domain.Screen{Text: text(1, 28)}},
 	)
 
-	for range 3 {
-		f.capture.tick(f.ctx)
-	}
+	f.capture.Observe(AgentEvent{Kind: AgentAppeared, Agent: a})
+	f.capture.tick(f.ctx)
+	f.capture.tick(f.ctx)
+	// Herdr refuses recent reads until the agent leaves working.
+	f.capture.Observe(AgentEvent{Kind: AgentChanged, Agent: f.status(a, domain.StatusIdle)})
+	f.capture.tick(f.ctx)
 	wantCalls := []testkit.ReadCall{
 		{Target: "p1", Source: domain.ScreenRecent, Lines: captureLines},
 		{Target: "p1", Source: domain.ScreenRecent, Lines: captureLines},
@@ -175,6 +178,89 @@ func TestCaptureVisibleThenRecentWithOlderPrefixKeepsHistoryContinuous(t *testin
 	}
 	if got := f.logs.count(slog.LevelWarn, "capture read failed"); got != 0 {
 		t.Fatalf("capture read WARN records after fallback success = %d, want 0", got)
+	}
+}
+
+// Herdr answers every recent read of a working alternate-screen agent with
+// agent_not_idle, so once it did the capture reads visible directly until
+// the agent leaves working; otherwise Herdr logs one error per second.
+func TestCaptureReadsVisibleWhileRecentIsBusy(t *testing.T) {
+	f := newCaptureFixture(t)
+	a := f.agent("p1", domain.StatusWorking)
+	f.capture.Observe(AgentEvent{Kind: AgentAppeared, Agent: a})
+	h := f.scriptReads(
+		scriptedRead{source: domain.ScreenRecent, err: domain.ErrAgentBusy},
+		scriptedRead{source: domain.ScreenVisible, screen: domain.Screen{Text: text(1, 20)}},
+		scriptedRead{source: domain.ScreenVisible, screen: domain.Screen{Text: text(2, 21)}},
+		scriptedRead{source: domain.ScreenVisible, screen: domain.Screen{Text: text(3, 22)}},
+		scriptedRead{source: domain.ScreenRecent, screen: domain.Screen{Text: text(1, 24)}},
+	)
+	for range 3 {
+		f.capture.tick(f.ctx)
+	}
+	idle := f.status(a, domain.StatusIdle)
+	f.capture.Observe(AgentEvent{Kind: AgentChanged, Agent: idle})
+	f.capture.tick(f.ctx)
+
+	wantCalls := []testkit.ReadCall{
+		{Target: "p1", Source: domain.ScreenRecent, Lines: captureLines},
+		{Target: "p1", Source: domain.ScreenVisible, Lines: captureLines},
+		{Target: "p1", Source: domain.ScreenVisible, Lines: captureLines},
+		{Target: "p1", Source: domain.ScreenVisible, Lines: captureLines},
+		{Target: "p1", Source: domain.ScreenRecent, Lines: captureLines},
+	}
+	if got := h.Reads(); !reflect.DeepEqual(got, wantCalls) {
+		t.Fatalf("Reads = %+v\nwant %+v", got, wantCalls)
+	}
+	if got, want := f.capture.hist[a.Key].Lines(), screenLines(text(1, 24)); !reflect.DeepEqual(got, want) {
+		t.Fatalf("history = %v\nwant %v", got, want)
+	}
+}
+
+func TestCaptureSinceSkipsBusyRecentWhileWorking(t *testing.T) {
+	f := newCaptureFixture(t)
+	a := f.agent("p1", domain.StatusWorking)
+	f.capture.Observe(AgentEvent{Kind: AgentAppeared, Agent: a})
+	h := f.scriptReads(
+		scriptedRead{source: domain.ScreenRecent, err: domain.ErrAgentBusy},
+		scriptedRead{source: domain.ScreenVisible, screen: domain.Screen{Text: text(1, 20)}},
+		scriptedRead{source: domain.ScreenVisible, screen: domain.Screen{Text: text(1, 20)}},
+	)
+	f.capture.tick(f.ctx)
+	if _, _, err := f.capture.Since(f.ctx, a.Key); err != nil {
+		t.Fatalf("Since = %v", err)
+	}
+	wantCalls := []testkit.ReadCall{
+		{Target: "p1", Source: domain.ScreenRecent, Lines: captureLines},
+		{Target: "p1", Source: domain.ScreenVisible, Lines: captureLines},
+		{Target: "p1", Source: domain.ScreenVisible, Lines: captureLines},
+	}
+	if got := h.Reads(); !reflect.DeepEqual(got, wantCalls) {
+		t.Fatalf("Reads = %+v\nwant %+v", got, wantCalls)
+	}
+}
+
+func TestCaptureBusyFollowsReassociationAndGone(t *testing.T) {
+	f := newCaptureFixture(t)
+	old := f.agent("p1", domain.StatusWorking)
+	f.capture.Observe(AgentEvent{Kind: AgentAppeared, Agent: old})
+	f.scriptReads(
+		scriptedRead{source: domain.ScreenRecent, err: domain.ErrAgentBusy},
+		scriptedRead{source: domain.ScreenVisible, screen: domain.Screen{Text: text(1, 20)}},
+	)
+	f.capture.tick(f.ctx)
+
+	delete(f.agents, old.Key)
+	moved := domain.Agent{Key: domain.Key{PaneID: "p1", TerminalID: "t2"}, Kind: "claude", Status: domain.StatusWorking}
+	f.agents[moved.Key] = moved
+	f.capture.Observe(AgentEvent{Kind: AgentChanged, Agent: moved, ReassociatedFrom: &old.Key})
+	if !f.capture.busy[moved.Key] || f.capture.busy[old.Key] {
+		t.Fatalf("busy after reassociation = %v, want only the new key", f.capture.busy)
+	}
+
+	f.capture.Observe(AgentEvent{Kind: AgentGone, Agent: moved})
+	if len(f.capture.busy) != 0 {
+		t.Fatalf("busy after gone = %v, want empty", f.capture.busy)
 	}
 }
 
@@ -213,7 +299,9 @@ func TestCaptureUpdatesSourceWhenRecentScreenIsUnchanged(t *testing.T) {
 		scriptedRead{source: domain.ScreenVisible, screen: domain.Screen{Text: text(1, 20)}},
 		scriptedRead{source: domain.ScreenRecent, screen: domain.Screen{Text: text(1, 20)}},
 	)
+	f.capture.Observe(AgentEvent{Kind: AgentAppeared, Agent: a})
 	f.capture.tick(f.ctx)
+	f.capture.Observe(AgentEvent{Kind: AgentChanged, Agent: f.status(a, domain.StatusIdle)})
 	f.capture.tick(f.ctx)
 
 	if got := f.capture.source[a.Key]; got != domain.ScreenRecent {

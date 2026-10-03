@@ -33,6 +33,11 @@ type Capture struct {
 	source map[domain.Key]domain.ScreenSource // last successful read source per key
 	status map[domain.Key]domain.Status
 	left   map[domain.Key]time.Time // when the agent last left working
+	// busy holds keys whose recent read Herdr refused with agent_not_idle
+	// during the current working stretch: an alternate-screen agent's
+	// history is readable only while idle, so retrying every tick only
+	// fills Herdr's log with errors. Cleared when the agent leaves working.
+	busy map[domain.Key]bool
 
 	// Interval is the tick between reads; Grace keeps reading after an
 	// agent left working so its final screen is committed; MinAway is the
@@ -61,6 +66,7 @@ func NewCapture(herdr domain.HerdrGateway, live func() []domain.Agent, clock dom
 		source:        map[domain.Key]domain.ScreenSource{},
 		status:        map[domain.Key]domain.Status{},
 		left:          map[domain.Key]time.Time{},
+		busy:          map[domain.Key]bool{},
 		Interval:      captureInterval,
 		Grace:         captureGrace,
 		MinAway:       captureMarkMinAway,
@@ -83,6 +89,7 @@ func (c *Capture) Observe(ev AgentEvent) {
 		delete(c.source, key)
 		delete(c.status, key)
 		delete(c.left, key)
+		delete(c.busy, key)
 		c.log.Debug("history dropped", slog.String("key", key.String()))
 		return
 	}
@@ -92,6 +99,7 @@ func (c *Capture) Observe(ev AgentEvent) {
 		moveAgentState(c.source, *from, key)
 		moveAgentState(c.status, *from, key)
 		moveAgentState(c.left, *from, key)
+		moveAgentState(c.busy, *from, key)
 		c.log.Debug("history reassociated", slog.String("old_key", from.String()), slog.String("new_key", key.String()))
 	}
 	prev, known := c.status[key]
@@ -119,6 +127,10 @@ func (c *Capture) Observe(ev AgentEvent) {
 			slog.Int64("away_ms", away.Milliseconds()), slog.Int("committed", h.Len()))
 	case known && prev == domain.StatusWorking && cur != domain.StatusWorking:
 		c.left[key] = c.clock.Now()
+		if c.busy[key] {
+			delete(c.busy, key)
+			c.log.Debug("[FIX] recent screen reads resumed", slog.String("key", key.String()), slog.String("to", string(cur)))
+		}
 		c.log.Debug("capture grace started", slog.String("key", key.String()), slog.String("to", string(cur)))
 	}
 }
@@ -159,7 +171,7 @@ func (c *Capture) tick(ctx context.Context) {
 		if a.Status != domain.StatusWorking && !c.inGrace(a.Key, now) {
 			continue
 		}
-		c.capture(ctx, a.Key)
+		c.capture(ctx, a.Key, a.Status == domain.StatusWorking)
 	}
 }
 
@@ -172,8 +184,8 @@ func (c *Capture) inGrace(key domain.Key, now time.Time) bool {
 
 // capture reads one screen and merges it. Read failures are logged and left
 // to the next tick.
-func (c *Capture) capture(ctx context.Context, key domain.Key) {
-	screen, source, err := c.read(ctx, key)
+func (c *Capture) capture(ctx context.Context, key domain.Key, working bool) {
+	screen, source, err := c.read(ctx, key, working)
 	if err != nil {
 		c.log.Warn("capture read failed", slog.String("key", key.String()), slog.String("err", err.Error()))
 		return
@@ -183,15 +195,35 @@ func (c *Capture) capture(ctx context.Context, key domain.Key) {
 	c.merge(key, screen, source)
 }
 
-func (c *Capture) read(ctx context.Context, key domain.Key) (domain.Screen, domain.ScreenSource, error) {
+// read prefers the recent source, which carries scrollback, and falls back
+// to visible when Herdr refuses it as busy. While working, a key already
+// refused goes straight to visible.
+func (c *Capture) read(ctx context.Context, key domain.Key, working bool) (domain.Screen, domain.ScreenSource, error) {
 	rctx, cancel := context.WithTimeout(ctx, c.ReadTimeout)
 	defer cancel()
+	c.mu.Lock()
+	skipRecent := working && c.busy[key]
+	c.mu.Unlock()
+	if skipRecent {
+		visible, err := c.herdr.ReadScreen(rctx, key.PaneID, domain.ScreenVisible, captureLines)
+		if err != nil {
+			return domain.Screen{}, "", err
+		}
+		return visible, domain.ScreenVisible, nil
+	}
 	screen, err := c.herdr.ReadScreen(rctx, key.PaneID, domain.ScreenRecent, captureLines)
 	if err == nil {
 		return screen, domain.ScreenRecent, nil
 	}
 	if !errors.Is(err, domain.ErrAgentBusy) || rctx.Err() != nil {
 		return domain.Screen{}, "", err
+	}
+	if working {
+		c.mu.Lock()
+		c.busy[key] = true
+		c.mu.Unlock()
+		c.log.Info("[FIX] recent screen busy, reading visible until the agent leaves working",
+			slog.String("key", key.String()), slog.String("err", err.Error()))
 	}
 
 	visible, visibleErr := c.herdr.ReadScreen(rctx, key.PaneID, domain.ScreenVisible, captureLines)
@@ -241,7 +273,10 @@ func (c *Capture) merge(key domain.Key, screen domain.Screen, source domain.Scre
 // Since reads a fresh screen, merges it and returns the history lines after
 // the last mark (all of them when there is none) and whether a mark exists.
 func (c *Capture) Since(ctx context.Context, key domain.Key) (lines []string, marked bool, err error) {
-	screen, source, err := c.read(ctx, key)
+	c.mu.Lock()
+	working := c.status[key] == domain.StatusWorking
+	c.mu.Unlock()
+	screen, source, err := c.read(ctx, key, working)
 	if err != nil {
 		return nil, false, err
 	}

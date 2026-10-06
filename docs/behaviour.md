@@ -556,11 +556,15 @@ you can see the plugin working. Tick `Quiet while at the desk` in
 `/options` → Quiet once the service messages ring too often.
 
 - **Presence** is the machine's input idle time, sampled every 10 seconds:
-  `ioreg` (`HIDIdleTime`) on macOS, `GetLastInputInfo` on Windows. Idle
-  shorter than `Away after` means at the desk. Linux has no source yet: the
-  automatic verdict there is always "away", so quiet mode never engages and
-  the daemon logs one warning at start. Herdr's own pane focus is not used:
-  another pane's agent would ring while you sit in front of it.
+  `ioreg` (`HIDIdleTime`) on macOS, `GetLastInputInfo` on Windows; on Linux
+  it is best-effort through whichever session source answers first — GNOME's
+  Mutter idle monitor, the freedesktop ScreenSaver idle time (`dbus-send`)
+  or `xprintidle`. Idle shorter than `Away after` means at the desk. A
+  session that answers none (headless machines, KDE Wayland today) keeps the
+  automatic verdict "away": quiet mode never engages, `/away` answers that
+  the platform is unavailable, and the daemon logs one warning at start.
+  Herdr's own pane focus is not used: another pane's agent would ring while
+  you sit in front of it.
 - **While at the desk** (quiet on): the reconciler defers every topic write
   (create, icon, name, close, reopen) and logs `reconcile deferred: operator
   at the desk (quiet)` once per period; blocked and done screens follow

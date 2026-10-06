@@ -70,6 +70,13 @@ func (p *Presence) Quiet() bool {
 	return p.quiet
 }
 
+// Supported reports whether this platform has an input idle source.
+func (p *Presence) Supported() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return !p.unsupported
+}
+
 // State snapshots the tracker.
 func (p *Presence) State() domain.PresenceState {
 	p.mu.Lock()

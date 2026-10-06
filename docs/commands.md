@@ -47,8 +47,9 @@ dialog a press toggles the option and the post is redrawn with the ticks;
 in full are under [Questions and buttons](behaviour.md#questions-and-buttons).
 
 While you are at the machine, quiet mode changes the sound of these posts or
-holds them until you leave; see
-[Quiet while at the desk](behaviour.md#quiet-while-at-the-desk).
+holds them until you leave (on Linux it needs a session that answers an idle
+query; see
+[Quiet while at the desk](behaviour.md#quiet-while-at-the-desk)).
 
 ## Commands in a topic
 

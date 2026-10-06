@@ -824,6 +824,9 @@ func (i *inbound) away(d time.Duration, by int64) string {
 		return presenceUnavailable
 	case !i.opts.QuietEnabled():
 		return presenceOff
+	case !i.presence.Supported():
+		// Without a source /away would change nothing; answer like /here.
+		return fmt.Sprintf(presenceHereFmt, presenceVerdictNone)
 	}
 	st := i.presence.Away(d, by)
 	i.log.Debug("away applied", slog.Int64("by", by), slog.Time("until", st.Until), slog.String("word", st.Word()))

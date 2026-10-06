@@ -632,6 +632,22 @@ func general(f *bridgeFixture, t *testing.T, id int, text string) string {
 	return sent[before].Text
 }
 
+func TestInboundAwayOnUnsupportedPlatform(t *testing.T) {
+	f := newBridgeFixture(t)
+	quietOn(f)
+	src := testkit.NewFakeIdle(0)
+	src.Unsupported()
+	p := NewPresence(src, f.opts, f.clock, nil)
+	f.in.SetPresence(p)
+	p.Poll(f.ctx)
+	if got := general(f, t, 1, "/away"); got != "🖥 presence is automatic again: not available on this platform" {
+		t.Fatalf("/away = %q", got)
+	}
+	if st := p.State(); st.ManualAway {
+		t.Fatalf("manual away set without a source: %+v", st)
+	}
+}
+
 func TestInboundAwayAndHere(t *testing.T) {
 	f := newBridgeFixture(t)
 	p, _ := withPresence(f, time.Second)

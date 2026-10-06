@@ -68,7 +68,7 @@ in a topic and what gets posted there is in [commands.md](commands.md).
 - Rename a topic by hand and the change goes back to Herdr: the tab is
   renamed (`tab.rename`), which is what the Agents panel shows on its first
   line, or the custom agent name when the agent has one (`agent.rename`).
-  The `<workspace> · ` prefix is optional; an empty remainder is ignored for
+  The `<workspace> ·` prefix is optional; an empty remainder is ignored for
   a tab and clears a custom name. The topic settles on the canonical form.
 - Close a topic by hand and the mirror goes quiet for that agent: no icon
   edits, no screen posts, until you reopen it. A successful same-agent
@@ -94,6 +94,10 @@ updated 21:35
   silently (the "pinned a message" notice the bot causes is deleted like a
   topic edit notice) and then only edited in place. An edit of an existing
   message never notifies anybody, so the dashboard costs no sound.
+- The line list stops at 40 agents and the rest is summarized as `… +N
+  more`, so the message stays a single editable one under Telegram's
+  4096-character limit; `/status` in General lists every agent, split
+  across messages.
 - It refreshes 2 s after the last agent event, presence change or option
   change (a burst of events is one edit), and once a minute while a
   duration label moved; an edit whose text would be unchanged is skipped.
@@ -275,7 +279,7 @@ option of the Posts group:
   read from the daemon's own home directory (`~/.codex`; `CODEX_HOME` is not
   honoured), so a Codex running inside WSL is not found.
 - **Formatted** (default): the same reply rendered for Telegram: headings become bold,
-  `- ` lists become `•`, quotes get a bar, `[text](url)` becomes a link,
+  `-` lists become `•`, quotes get a bar, `[text](url)` becomes a link,
   inline code and fenced blocks keep their monospace, pipe tables are
   monospaced too. A fenced block never straddles two messages; long replies
   are split and stop after five messages with `… (+N chars)` at the end.
@@ -556,11 +560,15 @@ you can see the plugin working. Tick `Quiet while at the desk` in
 `/options` → Quiet once the service messages ring too often.
 
 - **Presence** is the machine's input idle time, sampled every 10 seconds:
-  `ioreg` (`HIDIdleTime`) on macOS, `GetLastInputInfo` on Windows. Idle
-  shorter than `Away after` means at the desk. Linux has no source yet: the
-  automatic verdict there is always "away", so quiet mode never engages and
-  the daemon logs one warning at start. Herdr's own pane focus is not used:
-  another pane's agent would ring while you sit in front of it.
+  `ioreg` (`HIDIdleTime`) on macOS, `GetLastInputInfo` on Windows; on Linux
+  it is best-effort through whichever session source answers first — GNOME's
+  Mutter idle monitor, the freedesktop ScreenSaver idle time (`dbus-send`)
+  or `xprintidle`. Idle shorter than `Away after` means at the desk. A
+  session that answers none (headless machines, KDE Wayland today) keeps the
+  automatic verdict "away": quiet mode never engages, `/away` answers that
+  the platform is unavailable, and the daemon logs one warning at start.
+  Herdr's own pane focus is not used: another pane's agent would ring while
+  you sit in front of it.
 - **While at the desk** (quiet on): the reconciler defers every topic write
   (create, icon, name, close, reopen) and logs `reconcile deferred: operator
   at the desk (quiet)` once per period; blocked and done screens follow

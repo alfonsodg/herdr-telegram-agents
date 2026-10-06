@@ -74,6 +74,10 @@ func TestParseCommand(t *testing.T) {
 		{"new workspace and kind", "/new my project codex", "herdr_bot", domain.Command{Kind: domain.CmdNew, Workspace: "my project", AgentKind: "codex"}},
 		{"new kind upper case", "/new Work CODEX", "herdr_bot", domain.Command{Kind: domain.CmdNew, Workspace: "Work", AgentKind: "codex"}},
 		{"new kind only", "/new codex", "herdr_bot", domain.Command{Kind: domain.CmdNew, Workspace: "", AgentKind: "codex"}},
+		{"new qwen kind", "/new my project qwen", "herdr_bot", domain.Command{Kind: domain.CmdNew, Workspace: "my project", AgentKind: "qwen"}},
+		{"new letta kind", "/new Work letta", "herdr_bot", domain.Command{Kind: domain.CmdNew, Workspace: "Work", AgentKind: "letta"}},
+		{"new muse kind", "/new cosapia muse", "herdr_bot", domain.Command{Kind: domain.CmdNew, Workspace: "cosapia", AgentKind: "muse"}},
+		{"new unknown last word stays in the label", "/new cosapia quux", "herdr_bot", domain.Command{Kind: domain.CmdNew, Workspace: "cosapia quux", AgentKind: "claude"}},
 		{"git status", "/git status", "herdr_bot", domain.Command{Kind: domain.CmdGit, Git: domain.GitSpec{Sub: "status", Args: []string{"status", "--short", "--branch"}}}},
 		{"git diff", "/git diff", "herdr_bot", domain.Command{Kind: domain.CmdGit, Git: domain.GitSpec{Sub: "diff", Args: []string{"diff", "HEAD"}}}},
 		{"git diff staged", "/git diff staged", "herdr_bot", domain.Command{Kind: domain.CmdGit, Git: domain.GitSpec{Sub: "diff", Args: []string{"diff", "--cached"}}}},
@@ -202,7 +206,7 @@ func TestCutOverlay(t *testing.T) {
 }
 
 func TestIsAgentKind(t *testing.T) {
-	for _, k := range []string{"claude", "Claude", "CODEX", "pi", "maki"} {
+	for _, k := range []string{"claude", "Claude", "CODEX", "pi", "maki", "qwen", "letta", "muse"} {
 		if !domain.IsAgentKind(k) {
 			t.Errorf("IsAgentKind(%q) = false", k)
 		}
@@ -212,7 +216,7 @@ func TestIsAgentKind(t *testing.T) {
 			t.Errorf("IsAgentKind(%q) = true", k)
 		}
 	}
-	if len(domain.AgentKinds) != 21 || domain.DefaultAgentKind != "claude" || !domain.IsAgentKind(domain.DefaultAgentKind) {
+	if len(domain.AgentKinds) != 24 || domain.DefaultAgentKind != "claude" || !domain.IsAgentKind(domain.DefaultAgentKind) {
 		t.Errorf("AgentKinds = %v, default %q", domain.AgentKinds, domain.DefaultAgentKind)
 	}
 }

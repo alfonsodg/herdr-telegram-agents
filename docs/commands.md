@@ -47,8 +47,9 @@ dialog a press toggles the option and the post is redrawn with the ticks;
 in full are under [Questions and buttons](behaviour.md#questions-and-buttons).
 
 While you are at the machine, quiet mode changes the sound of these posts or
-holds them until you leave; see
-[Quiet while at the desk](behaviour.md#quiet-while-at-the-desk).
+holds them until you leave (on Linux it needs a session that answers an idle
+query; see
+[Quiet while at the desk](behaviour.md#quiet-while-at-the-desk)).
 
 ## Commands in a topic
 
@@ -165,11 +166,11 @@ and the commands appear in Telegram's `/` menu for the group.
 
 | You write | What happens |
 |-----------|--------------|
-| `/status` | every live agent with its status emoji, a link to its topic and, once known, how long it has been in that status (`· 12 min`); the first line says when quiet mode is holding edits (`🔕 …`), when you are away by hand (`🏃 …`) or when sync is off (`🔇 …`). The same text, with an `updated HH:MM` footer, is the pinned dashboard; see [The dashboard](behaviour.md#the-dashboard) |
+| `/status` | every live agent with its status emoji, a link to its topic and, once known, how long it has been in that status (`· 12 min`); the first line says when quiet mode is holding edits (`🔕 …`), when you are away by hand (`🏃 …`) or when sync is off (`🔇 …`). The same text, with an `updated HH:MM` footer, is the pinned dashboard, which stops at 40 agents with `… +N more` to stay one editable message; see [The dashboard](behaviour.md#the-dashboard) |
 | `/options` | the settings panel: sync, quiet mode, status icons, secret redaction, topic cleanup, and a two-press plugin update action; see [Options](behaviour.md#options) and [Plugin updates](behaviour.md#plugin-updates) |
 | `/away`, `/away 2h` | you count as away until `/here`, or for that long (any Go duration from `1m` to `168h`): held topic edits and posts go out at once; see [Quiet while at the desk](behaviour.md#quiet-while-at-the-desk) |
 | `/here` | presence is automatic again; the reply says the current verdict |
-| `/new <workspace> [kind]` | opens an unfocused tab in that workspace (`tab.create`, Herdr's default directory and label) and starts an agent in its root pane (`agent.start`). The workspace is matched by label, case-insensitive: an exact match wins, else a unique prefix (`/new wor` for `Work`); labels may contain spaces. The last word is the kind only when Herdr knows it (`pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `maki`), default `claude`; no arguments reach the agent. The first reply is `starting <kind> in <workspace> …`, the second, up to a minute later, `started <kind> in <workspace> (pane <id>)` or `⚠️ <kind> did not start in <workspace>: <reason>`; the topic appears through the ordinary sync. A bare `/new`, an unknown or an ambiguous label answer with the workspace list |
+| `/new <workspace> [kind]` | opens an unfocused tab in that workspace (`tab.create`, Herdr's default directory and label) and starts an agent in its root pane (`agent.start`). The workspace is matched by label, case-insensitive: an exact match wins, else a unique prefix (`/new wor` for `Work`); labels may contain spaces. The last word is the kind only when Herdr knows it (`pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `qwen`, `letta`, `maki`, `muse`), default `claude`; no arguments reach the agent. The first reply is `starting <kind> in <workspace> …`, the second, up to a minute later, `started <kind> in <workspace> (pane <id>)` or `⚠️ <kind> did not start in <workspace>: <reason>`; the topic appears through the ordinary sync. A bare `/new`, an unknown or an ambiguous label answer with the workspace list |
 | `/observers`, `/observers add <id>`, `/observers remove <id>` | the operator and observer lists plus the unknown accounts seen recently (name, `@username`, id, when and where); add or remove an observer, saved to `config.json` and applied at once. An observer may use `/status` and `/help` here and nothing else; see [Operators and observers](behaviour.md#operators-and-observers) |
 | `/help` | the command list |
 

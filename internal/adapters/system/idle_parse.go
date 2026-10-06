@@ -4,6 +4,7 @@ import (
 	"errors"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -25,4 +26,18 @@ func parseHIDIdleTime(out []byte) (time.Duration, error) {
 		return 0, err
 	}
 	return time.Duration(ns), nil
+}
+
+// parseIdleMillis reads the millisecond count dbus-send or xprintidle
+// prints: the value is the last whitespace-separated token of the output.
+func parseIdleMillis(out []byte) (time.Duration, bool) {
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 {
+		return 0, false
+	}
+	ms, err := strconv.ParseUint(fields[len(fields)-1], 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return time.Duration(ms) * time.Millisecond, true
 }

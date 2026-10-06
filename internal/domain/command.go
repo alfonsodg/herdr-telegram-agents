@@ -75,13 +75,14 @@ const (
 // DefaultAgentKind is what /new starts when no kind is given.
 const DefaultAgentKind = "claude"
 
-// AgentKinds lists the kinds `herdr agent start` accepts (Herdr 0.7.5, from
-// `herdr agent start --help`). /new treats its last word as a kind only when
+// AgentKinds lists the kinds `herdr agent start` accepts (Herdr 0.9.3, from
+// `herdr agent start --help`, in its order). /new treats its last word as a kind only when
 // it is in this list, so a workspace label may end in any other word.
 var AgentKinds = []string{
 	"pi", "claude", "codex", "gemini", "cursor", "devin", "agy", "cline",
 	"omp", "mastracode", "opencode", "copilot", "kimi", "kiro", "droid",
-	"amp", "grok", "hermes", "kilo", "qodercli", "maki",
+	"amp", "grok", "hermes", "kilo", "qodercli", "qwen", "letta", "maki",
+	"muse",
 }
 
 // IsAgentKind reports whether s names a kind in AgentKinds

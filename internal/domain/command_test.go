@@ -73,6 +73,8 @@ func TestParseCommand(t *testing.T) {
 		{"new workspace with spaces", "/new My Project", "herdr_bot", domain.Command{Kind: domain.CmdNew, Workspace: "My Project", AgentKind: "claude"}},
 		{"new workspace and kind", "/new my project codex", "herdr_bot", domain.Command{Kind: domain.CmdNew, Workspace: "my project", AgentKind: "codex"}},
 		{"new kind upper case", "/new Work CODEX", "herdr_bot", domain.Command{Kind: domain.CmdNew, Workspace: "Work", AgentKind: "codex"}},
+		{"new kind added in herdr 0.9", "/new work qwen", "herdr_bot", domain.Command{Kind: domain.CmdNew, Workspace: "work", AgentKind: "qwen"}},
+		{"new label ending in a kind word", "/new my letta", "herdr_bot", domain.Command{Kind: domain.CmdNew, Workspace: "my", AgentKind: "letta"}},
 		{"new kind only", "/new codex", "herdr_bot", domain.Command{Kind: domain.CmdNew, Workspace: "", AgentKind: "codex"}},
 		{"git status", "/git status", "herdr_bot", domain.Command{Kind: domain.CmdGit, Git: domain.GitSpec{Sub: "status", Args: []string{"status", "--short", "--branch"}}}},
 		{"git diff", "/git diff", "herdr_bot", domain.Command{Kind: domain.CmdGit, Git: domain.GitSpec{Sub: "diff", Args: []string{"diff", "HEAD"}}}},
@@ -202,7 +204,7 @@ func TestCutOverlay(t *testing.T) {
 }
 
 func TestIsAgentKind(t *testing.T) {
-	for _, k := range []string{"claude", "Claude", "CODEX", "pi", "maki"} {
+	for _, k := range []string{"claude", "Claude", "CODEX", "pi", "maki", "qwen", "Qwen", "letta", "muse"} {
 		if !domain.IsAgentKind(k) {
 			t.Errorf("IsAgentKind(%q) = false", k)
 		}
@@ -212,7 +214,7 @@ func TestIsAgentKind(t *testing.T) {
 			t.Errorf("IsAgentKind(%q) = true", k)
 		}
 	}
-	if len(domain.AgentKinds) != 21 || domain.DefaultAgentKind != "claude" || !domain.IsAgentKind(domain.DefaultAgentKind) {
+	if len(domain.AgentKinds) != 24 || domain.DefaultAgentKind != "claude" || !domain.IsAgentKind(domain.DefaultAgentKind) {
 		t.Errorf("AgentKinds = %v, default %q", domain.AgentKinds, domain.DefaultAgentKind)
 	}
 }

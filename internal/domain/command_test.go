@@ -50,7 +50,9 @@ func TestParseCommand(t *testing.T) {
 		{"forward model bare opens the picker", "/model", "herdr_bot", domain.Command{Kind: domain.CmdForward, Text: "/model", Forward: domain.ForwardRule{Post: domain.ForwardPostScreen, Dismiss: true}}},
 		{"forward model with name", "/model sonnet", "herdr_bot", domain.Command{Kind: domain.CmdForward, Text: "/model sonnet", Forward: domain.ForwardRule{Post: domain.ForwardPostTail}}},
 		{"forward model with suffix and name", "/model@herdr_bot opus", "herdr_bot", domain.Command{Kind: domain.CmdForward, Text: "/model opus", Forward: domain.ForwardRule{Post: domain.ForwardPostTail}}},
-		{"near miss stays unknown", "/models", "herdr_bot", domain.Command{Kind: domain.CmdUnknown, Text: "/models"}},
+		{"forward models opens the OpenCode picker", "/models", "herdr_bot", domain.Command{Kind: domain.CmdForward, Text: "/models", Forward: domain.ForwardRule{Post: domain.ForwardPostScreen}}},
+		{"forward models with bot suffix", "/models@herdr_bot", "herdr_bot", domain.Command{Kind: domain.CmdForward, Text: "/models", Forward: domain.ForwardRule{Post: domain.ForwardPostScreen}}},
+		{"near miss stays unknown", "/modelz", "herdr_bot", domain.Command{Kind: domain.CmdUnknown, Text: "/modelz"}},
 		{"away until here", "/away", "herdr_bot", domain.Command{Kind: domain.CmdAway}},
 		{"away hours", "/away 2h", "herdr_bot", domain.Command{Kind: domain.CmdAway, Away: 2 * time.Hour}},
 		{"away minutes upper case", "/AWAY 30M", "herdr_bot", domain.Command{Kind: domain.CmdAway, Away: 30 * time.Minute}},
@@ -172,7 +174,7 @@ func TestRoute(t *testing.T) {
 }
 
 func TestForwardWords(t *testing.T) {
-	want := []string{"clear", "compact", "model", "usage"}
+	want := []string{"clear", "compact", "model", "models", "usage"}
 	if got := domain.ForwardWords(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("ForwardWords = %v, want %v", got, want)
 	}

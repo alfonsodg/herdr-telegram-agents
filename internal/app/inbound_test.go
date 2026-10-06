@@ -317,7 +317,9 @@ func TestInboundForwardClearPostsTail(t *testing.T) {
 
 func TestInboundForwardUsageCutsOverlayAndDismisses(t *testing.T) {
 	f := newBridgeFixture(t)
-	f.add(t, "p1", "t1", "reviewer", domain.StatusDone)
+	a := f.add(t, "p1", "t1", "reviewer", domain.StatusDone)
+	a.Kind = "claude"
+	f.agents[a.Key] = a
 	f.herdr.SetScreen("p1", overlayScreen)
 
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 22, "/usage")); err != nil {
@@ -335,7 +337,9 @@ func TestInboundForwardUsageCutsOverlayAndDismisses(t *testing.T) {
 
 func TestInboundForwardUsageCutsTheFrame(t *testing.T) {
 	f := newBridgeFixture(t)
-	f.add(t, "p1", "t1", "reviewer", domain.StatusDone)
+	a := f.add(t, "p1", "t1", "reviewer", domain.StatusDone)
+	a.Kind = "claude"
+	f.agents[a.Key] = a
 	f.herdr.SetScreen("p1", overlayScreen+testFrame)
 
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 24, "/usage")); err != nil {
@@ -374,7 +378,9 @@ func TestInboundForwardScreenWithoutRuleIsPostedWhole(t *testing.T) {
 
 func TestInboundForwardModelBareVsName(t *testing.T) {
 	f := newBridgeFixture(t)
-	f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	a.Kind = "claude"
+	f.agents[a.Key] = a
 	f.herdr.SetScreen("p1", overlayScreen)
 
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 24, "/model")); err != nil {
@@ -404,6 +410,30 @@ func TestInboundForwardModelBareVsName(t *testing.T) {
 	}
 	sent := f.tg.Sent()
 	if len(sent) != 2 || sent[1].Text != "❯ /model sonnet\n  ⎿  Set model to sonnet" || sent[1].ReplyTo != 25 {
+		t.Fatalf("Sent = %+v", sent)
+	}
+}
+
+// TestInboundForwardModelOnCodexKeepsPicker: the auto-dismiss is for Claude
+// Code overlays; on codex the /model picker must stay open for /keys.
+func TestInboundForwardModelOnCodexKeepsPicker(t *testing.T) {
+	f := newBridgeFixture(t)
+	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	a.Kind = "codex"
+	f.agents[a.Key] = a
+	f.herdr.SetScreen("p1", "Select a model\n> gpt-5.1-codex\n  gpt-5.1")
+
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 30, "/model")); err != nil {
+		t.Fatal(err)
+	}
+	f.fireCommand(t, 1)
+	if p := f.herdr.Prompts(); len(p) != 1 || p[0] != "p1: /model" {
+		t.Fatalf("Prompts = %v", p)
+	}
+	if k := f.herdr.Keys(); len(k) != 0 {
+		t.Fatalf("codex picker dismissed: %+v", k)
+	}
+	if sent := f.tg.Sent(); len(sent) != 1 || !strings.Contains(sent[0].Text, "Select a model") {
 		t.Fatalf("Sent = %+v", sent)
 	}
 }
@@ -475,7 +505,9 @@ func TestInboundForwardPromptFailure(t *testing.T) {
 
 func TestInboundForwardReadFailureStillDismisses(t *testing.T) {
 	f := newBridgeFixture(t)
-	f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	a.Kind = "claude"
+	f.agents[a.Key] = a
 
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 31, "/usage")); err != nil {
 		t.Fatal(err)
@@ -490,7 +522,9 @@ func TestInboundForwardReadFailureStillDismisses(t *testing.T) {
 
 func TestInboundForwardDismissFailureIsReported(t *testing.T) {
 	f := newBridgeFixture(t)
-	f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	a.Kind = "claude"
+	f.agents[a.Key] = a
 	f.herdr.SetScreen("p1", overlayScreen)
 
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 32, "/model")); err != nil {
@@ -506,7 +540,9 @@ func TestInboundForwardDismissFailureIsReported(t *testing.T) {
 
 func TestInboundForwardReplacesPending(t *testing.T) {
 	f := newBridgeFixture(t)
-	f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	a.Kind = "claude"
+	f.agents[a.Key] = a
 	f.herdr.SetScreen("p1", overlayScreen)
 
 	for _, id := range []int{33, 34} {
@@ -545,6 +581,8 @@ func TestInboundForwardAgentGoneBeforeFire(t *testing.T) {
 func TestInboundForwardTopicGoneStillDismisses(t *testing.T) {
 	f := newBridgeFixture(t)
 	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	a.Kind = "claude"
+	f.agents[a.Key] = a
 
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 36, "/usage")); err != nil {
 		t.Fatal(err)

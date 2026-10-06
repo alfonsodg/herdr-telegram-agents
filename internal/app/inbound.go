@@ -423,8 +423,17 @@ func (i *inbound) Reassociate(from, to domain.Key) {
 // working or blocked agent gets a refusal instead: the text would land in
 // a dialog or in Claude's input queue, and the esc that closes an overlay
 // would interrupt it.
+// kindClaude is the agent kind the forwarded-command dismiss targets: the
+// auto-esc exists to close Claude Code overlays.
+const kindClaude = "claude"
+
 func (i *inbound) forward(ctx context.Context, msg domain.TopicMessage, key domain.Key, agent domain.Agent, cmd domain.Command) error {
 	word := forwardWord(cmd.Text)
+	if agent.Kind != kindClaude {
+		// Keep other agents' UI up: codex's /model picker must stay open
+		// for the operator to drive with /keys.
+		cmd.Forward.Dismiss = false
+	}
 	if hint, refused := forwardRefusal(agent.Status); refused {
 		i.log.Info("command refused", slog.String("key", key.String()), slog.String("word", word),
 			slog.String("status", string(agent.Status)), slog.Int("message_id", msg.MessageID))

@@ -202,7 +202,7 @@ func TestCutOverlay(t *testing.T) {
 }
 
 func TestIsAgentKind(t *testing.T) {
-	for _, k := range []string{"claude", "Claude", "CODEX", "pi", "maki"} {
+	for _, k := range []string{"claude", "Claude", "CODEX", "pi", "maki", "qwen", "letta", "muse"} {
 		if !domain.IsAgentKind(k) {
 			t.Errorf("IsAgentKind(%q) = false", k)
 		}
@@ -212,7 +212,7 @@ func TestIsAgentKind(t *testing.T) {
 			t.Errorf("IsAgentKind(%q) = true", k)
 		}
 	}
-	if len(domain.AgentKinds) != 21 || domain.DefaultAgentKind != "claude" || !domain.IsAgentKind(domain.DefaultAgentKind) {
+	if len(domain.AgentKinds) != 24 || domain.DefaultAgentKind != "claude" || !domain.IsAgentKind(domain.DefaultAgentKind) {
 		t.Errorf("AgentKinds = %v, default %q", domain.AgentKinds, domain.DefaultAgentKind)
 	}
 }

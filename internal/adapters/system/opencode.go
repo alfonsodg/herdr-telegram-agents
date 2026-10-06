@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -66,9 +67,23 @@ func (e *OpenCodeExporter) Export(ctx context.Context, sessionID string) ([]byte
 	runExport := func(args ...string) (*limitedWriter, error) {
 		cmd := command(childCtx, bin, args...)
 		cmd.WaitDelay = openCodeWaitDelay
+		cmd.Stderr = io.Discard
 		stdout := &limitedWriter{max: e.maxBytes}
-		cmd.Stdout, cmd.Stderr = stdout, io.Discard
-		return stdout, run(cmd)
+		// opencode silently truncates its JSON when stdout is a pipe (64 KiB
+		// multiples, exit 0); a regular file receives the whole stream, so
+		// the child writes to a private temp file that is read back under
+		// the cap and removed at once.
+		file, err := os.CreateTemp("", "herdr-tg-opencode-*.json")
+		if err != nil {
+			return stdout, fmt.Errorf("opencode export: temp file: %w", err)
+		}
+		defer func() { _ = os.Remove(file.Name()) }()
+		cmd.Stdout = file
+		runErr := run(cmd)
+		_, _ = file.Seek(0, io.SeekStart)
+		_, _ = io.Copy(stdout, io.LimitReader(file, int64(e.maxBytes)+1))
+		_ = file.Close()
+		return stdout, runErr
 	}
 	stdout, runErr := runExport("session", "export", sessionID)
 	// OpenCode 1.x used "opencode export". Confirm the major version

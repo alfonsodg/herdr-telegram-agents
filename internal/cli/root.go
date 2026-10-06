@@ -28,7 +28,6 @@ var documentedCommands = []struct{ name, help string }{
 	{"setup-pane", "[[panes]] popup: interactive setup wizard"},
 	{"logs-pane", "[[panes]] overlay: tail of daemon.log"},
 	{"doctor-pane", "[[panes]] overlay: one line per diagnostic check"},
-	{"event", "[[events]] hook (fallback notifications)"},
 }
 
 // command is one subcommand handler. It receives the arguments after the
@@ -90,17 +89,7 @@ func commands() map[string]command {
 		"setup-pane":    runSetupPane,
 		"logs-pane":     runLogsPane,
 		"doctor-pane":   runDoctorPane,
-		"event":         notImplemented("event"),
 		"dev":           runDev,
-	}
-}
-
-// notImplemented returns a placeholder handler for subcommands that arrive
-// in later milestones. It exits 2 so a misconfigured manifest is noticed.
-func notImplemented(name string) command {
-	return func(ctx *runContext, _ []string) int {
-		fmt.Fprintf(ctx.stderr, "herdr-tg %s: not implemented yet\n", name)
-		return exitUsage
 	}
 }
 

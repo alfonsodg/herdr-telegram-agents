@@ -19,7 +19,6 @@ type museFixture struct {
 	home    string
 	session string
 	lines   []string
-	noLog   bool
 }
 
 const museSessionID = "01a10885-b7fb-7ef0-95cd-4fb8af9067ca"

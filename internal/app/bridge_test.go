@@ -105,7 +105,9 @@ func TestBridgeSettleTimerFiresThroughRun(t *testing.T) {
 
 func TestBridgeServesCommandFollowUp(t *testing.T) {
 	r := newRunningBridge(t)
-	r.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	a := r.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	a.Kind = "claude"
+	r.agents[a.Key] = a
 	r.herdr.SetScreen("p1", overlayScreen)
 	r.bridge.Submit(topicMsg(101, 7, "/usage"))
 	waitUntil(t, "command typed", func() bool { return len(r.herdr.Prompts()) == 1 })

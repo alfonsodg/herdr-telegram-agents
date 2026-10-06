@@ -485,6 +485,9 @@ func TestOutboundOpenCodePendingReplyPostsNothing(t *testing.T) {
 	if !strings.Contains(f.logBuf.String(), "reply not ready, post skipped") {
 		t.Fatalf("skip not logged: %s", f.logBuf.String())
 	}
+	if f.clock.Pending() == 0 {
+		t.Fatal("no retry armed for the pending reply")
+	}
 }
 
 func TestOutboundOpenCodeExportTimeoutDoneModes(t *testing.T) {

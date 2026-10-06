@@ -3,6 +3,7 @@ package domain_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/permgps/herdr-telegram-agents/internal/domain"
@@ -76,6 +77,18 @@ func TestMultiReplySourceStopsOnFailure(t *testing.T) {
 	second := &stubReplySource{reply: domain.Reply{Text: "wrong"}}
 	_, err := (domain.MultiReplySource{first, second}).LastReply(context.Background(), domain.Agent{})
 	if !errors.Is(err, want) || second.called {
+		t.Fatalf("err = %v, second called = %v", err, second.called)
+	}
+}
+
+// TestMultiReplySourceStopsOnPending: a pending reply means "the turn is
+// not over yet", not "this source cannot answer", so later sources must
+// not overwrite it with their own ErrNoReply.
+func TestMultiReplySourceStopsOnPending(t *testing.T) {
+	first := &stubReplySource{err: fmt.Errorf("%w: the turn is still running", domain.ErrReplyPending)}
+	second := &stubReplySource{err: domain.ErrNoReply}
+	_, err := (domain.MultiReplySource{first, second}).LastReply(context.Background(), domain.Agent{})
+	if !errors.Is(err, domain.ErrReplyPending) || second.called {
 		t.Fatalf("err = %v, second called = %v", err, second.called)
 	}
 }

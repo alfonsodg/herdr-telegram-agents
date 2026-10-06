@@ -7,7 +7,10 @@
 # approved: the binary must match it as well as checksums.txt.
 $ErrorActionPreference = "Stop"
 
-Set-Location (Join-Path $PSScriptRoot "..")
+# -LiteralPath: a checkout under a folder such as plugin[1] must not be read
+# as a wildcard pattern. Every later path is relative to this directory.
+Set-Location -LiteralPath (Join-Path $PSScriptRoot "..")
+Write-Host "install: working in $((Get-Location).ProviderPath)"
 
 $repo = "permgps/herdr-telegram-agents"
 

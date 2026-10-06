@@ -268,6 +268,7 @@ on 2026-09-25. The code is also built and unit-tested on a Windows CI runner.
 - [x] `status` reports the daemon's line, `quiet=` and `pager=` included
 - [x] Presence works with `Quiet while at the desk` ticked: typing keeps `quiet=on` (the `GetLastInputInfo` idle source), leaving the machine for `Away after` minutes turns it to `away` and the topics catch up
 - [x] A daemon that is not listening is reported as "not listening on its control channel" and `stop` escalates to a kill
+- [ ] `scripts/install.ps1` run from a checkout under a folder with brackets (for example `plugin[1]\`) installs `bin\herdr-tg.exe` with a verified checksum, and a Telegram update of that checkout succeeds (issue #19)
 
 ## Private sharing acceptance
 

@@ -35,7 +35,7 @@ type wiring struct {
 	tightenPerms    func(env compose.PluginEnv, log *slog.Logger) int
 	notify          func(ctx context.Context, env compose.PluginEnv, body string, log *slog.Logger) error
 	pidFile         func(env compose.PluginEnv, log *slog.Logger) domain.PidFile
-	buildDaemon     func(ctx context.Context, env compose.PluginEnv, cfg domain.Config, log *slog.Logger, fatal context.CancelFunc) (*compose.Daemon, func(context.Context), func(), error)
+	buildDaemon     func(ctx context.Context, env compose.PluginEnv, cfg domain.Config, log *slog.Logger, fatal context.CancelFunc, retry compose.TelegramStartRetry) (*compose.Daemon, func(context.Context), func(), error)
 	buildSupervisor func(env compose.PluginEnv, log *slog.Logger) supervisor
 	startControl    func(ctx context.Context, env compose.PluginEnv, h compose.ControlHandlers, log *slog.Logger) (func(), error)
 	buildSetup      func(env compose.PluginEnv, ui domain.SetupUI, log *slog.Logger) setupRunner

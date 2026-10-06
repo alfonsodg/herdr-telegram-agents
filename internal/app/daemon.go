@@ -139,6 +139,25 @@ func (d *Daemon) pagerWord() string {
 	return "on"
 }
 
+// StartingLine is the status reply of a daemon still trying to reach
+// Telegram: version=<v> pid=<n> uptime=<s> telegram=connecting before the
+// first failure, telegram=waiting attempt=<n> after it. It never says
+// telegram=ready, so the update worker's health check keeps waiting.
+func StartingLine(version string, pid int, since time.Time, attempt int, now time.Time) string {
+	if version == "" {
+		version = "dev"
+	}
+	uptime := now.Sub(since).Round(time.Second)
+	if since.IsZero() || uptime < 0 {
+		uptime = 0
+	}
+	line := fmt.Sprintf("version=%s pid=%d uptime=%s", version, pid, uptime)
+	if attempt == 0 {
+		return line + " telegram=connecting"
+	}
+	return fmt.Sprintf("%s telegram=waiting attempt=%d", line, attempt)
+}
+
 // StatsLine renders Stats as the one-line status reply:
 // version=<v> pid=<n> uptime=<s> agents=<n> dropped=<n> herdr=ok|failing since <s> sync=on|off cleanup=<n>d|off quiet=off|on|away|away-manual pager=off|on|unreachable.
 func StatsLine(s Stats, now time.Time) string {

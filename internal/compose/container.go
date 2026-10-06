@@ -40,7 +40,19 @@ type (
 	ControlHandlers = system.ControlHandlers
 	// Doctor runs the diagnostic checks of the doctor pane.
 	Doctor = app.Doctor
+	// TelegramStartRetry is how the daemon keeps trying Telegram at start.
+	TelegramStartRetry = telegram.StartRetry
+	// TelegramStartWait describes one failed Telegram startup attempt.
+	TelegramStartWait = telegram.StartWait
 )
+
+// DefaultTelegramStartRetry is the daemon's startup retry policy.
+func DefaultTelegramStartRetry() TelegramStartRetry { return telegram.DefaultStartRetry() }
+
+// StartingLine is the status reply of a daemon still reaching Telegram.
+func StartingLine(version string, pid int, since time.Time, attempt int, now time.Time) string {
+	return app.StartingLine(version, pid, since, attempt, now)
+}
 
 // ErrSetupCancelled is returned by Setup.Run when the user declines to save.
 var ErrSetupCancelled = app.ErrSetupCancelled
@@ -305,26 +317,35 @@ func BuildSetup(env PluginEnv, ui domain.SetupUI, log *slog.Logger) *Setup {
 // BuildDaemon connects to Herdr and Telegram and wires the sync loop. The
 // returned run function polls Telegram until its context ends; closeAll
 // releases the Herdr connection. fatal is invoked by the Telegram poller on
-// 401/409 and should cancel the daemon context with a cause.
-func BuildDaemon(ctx context.Context, env PluginEnv, cfg domain.Config, log *slog.Logger, fatal context.CancelFunc) (
+// 401/409 and should cancel the daemon context with a cause. retry is the
+// Telegram startup retry policy; a cancelled ctx ends its wait.
+func BuildDaemon(ctx context.Context, env PluginEnv, cfg domain.Config, log *slog.Logger, fatal context.CancelFunc, retry TelegramStartRetry) (
 	d *Daemon, run func(context.Context), closeAll func(), err error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
 	log.Debug("compose daemon", slog.String("socket", env.SocketPath), slog.String("state_dir", env.StateDir),
-		slog.Int64("chat_id", cfg.ChatID))
+		slog.Int64("chat_id", cfg.ChatID), slog.Duration("retry_max", retry.Max))
 
+	// A missing Herdr socket still fails the start at once, but the event
+	// stream opens only after Telegram answered: while the daemon waits for
+	// the network nothing would read it, and Herdr would be left writing
+	// into a full subscriber socket.
 	hg := NewHerdrGateway(env.SocketPath, log)
+	if _, err := hg.Ping(ctx); err != nil {
+		return nil, nil, nil, fmt.Errorf("herdr connect %s: %w", env.SocketPath, err)
+	}
+
+	tg, run, err := telegram.Connect(ctx, cfg, log, fatal, retry)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
 	if err := hg.Start(ctx); err != nil {
 		return nil, nil, nil, fmt.Errorf("herdr connect %s: %w", env.SocketPath, err)
 	}
+	log.Debug("[FIX] herdr stream started after telegram connected", slog.String("socket", env.SocketPath))
 	closeAll = func() { _ = hg.Close() }
-
-	tg, run, err := telegram.Connect(ctx, cfg, log, fatal)
-	if err != nil {
-		closeAll()
-		return nil, nil, nil, err
-	}
 
 	mappings := state.NewMappingStore(env.StateDir, log)
 	mapping, err := mappings.Load(ctx)

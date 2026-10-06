@@ -84,7 +84,7 @@ func TestConnect(t *testing.T) {
 	log, buf := newTestLog(t)
 	cfg := domain.Config{Version: 1, BotToken: testToken, ChatID: testChatID, OperatorIDs: []int64{testOperator}}
 	ctx, cancel := context.WithCancel(ctxT(t))
-	gw, run, err := telegram.Connect(ctx, cfg, log, cancel, bot.WithServerURL(api.server.URL))
+	gw, run, err := telegram.Connect(ctx, cfg, log, cancel, telegram.StartRetry{}, bot.WithServerURL(api.server.URL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestConnect(t *testing.T) {
 func TestConnectRejectsBadToken(t *testing.T) {
 	api := newFakeAPI(t)
 	api.on("getMe", func(url.Values) apiReply { return errReply(401, "Unauthorized") })
-	_, _, err := telegram.Connect(ctxT(t), domain.Config{BotToken: testToken, ChatID: testChatID}, nil, nil, bot.WithServerURL(api.server.URL))
+	_, _, err := telegram.Connect(ctxT(t), domain.Config{BotToken: testToken, ChatID: testChatID}, nil, nil, telegram.StartRetry{}, bot.WithServerURL(api.server.URL))
 	if !errors.Is(err, domain.ErrBotUnauthorized) {
 		t.Fatalf("Connect = %v", err)
 	}

@@ -14,6 +14,8 @@ import (
 // HerdrGateway is the Herdr port together with its lifecycle.
 type HerdrGateway interface {
 	domain.HerdrGateway
+	// Ping checks the socket without starting the event stream.
+	domain.HerdrProber
 	// Start connects to the socket and launches the event stream.
 	Start(ctx context.Context) error
 	// Close stops the stream and drops the connections.

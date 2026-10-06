@@ -72,6 +72,32 @@ func TestReportDropsOncePerInterval(t *testing.T) {
 	}
 }
 
+func TestStartingLine(t *testing.T) {
+	now := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name    string
+		version string
+		since   time.Time
+		attempt int
+		want    string
+	}{
+		{"connecting", "v0.15.0", now.Add(-3 * time.Second), 0, "version=v0.15.0 pid=42 uptime=3s telegram=connecting"},
+		{"waiting", "v0.15.0", now.Add(-90 * time.Second), 3, "version=v0.15.0 pid=42 uptime=1m30s telegram=waiting attempt=3"},
+		{"zero since, no version", "", time.Time{}, 1, "version=dev pid=42 uptime=0s telegram=waiting attempt=1"},
+	}
+	for _, c := range cases {
+		got := StartingLine(c.version, 42, c.since, c.attempt, now)
+		if got != c.want {
+			t.Errorf("%s: StartingLine = %q, want %q", c.name, got, c.want)
+		}
+		// The update worker's health check waits for telegram=ready and
+		// herdr=ok; a starting daemon must report neither.
+		if strings.Contains(got, "telegram=ready") || strings.Contains(got, "herdr=") || strings.Contains(got, "\n") {
+			t.Errorf("%s: StartingLine = %q claims health or spans lines", c.name, got)
+		}
+	}
+}
+
 func TestStatsLine(t *testing.T) {
 	now := time.Date(2026, 9, 3, 12, 0, 0, 0, time.UTC)
 	cases := []struct {

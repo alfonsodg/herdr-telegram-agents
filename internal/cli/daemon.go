@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -90,8 +91,35 @@ func runDaemon(rc *runContext, _ []string) int {
 	defer cancel(nil)
 	fatal := func() { cancel(errTelegramFatal) }
 
-	d, runTelegram, closeAll, err := wire.buildDaemon(runCtx, env, cfg, log, fatal)
+	// The control channel serves stop, resync and status on every
+	// platform; on Unix the signal handlers above stay as the fallback for
+	// an action from an older build. It is up before the build, so stop and
+	// status work while the daemon waits for Telegram.
+	start := &startupState{since: time.Now(), version: rc.version, log: log}
+	stopControl, err := wire.startControl(ctlCtx, env, compose.ControlHandlers{
+		Stop:   requestStop,
+		Resync: start.resync,
+		Status: start.status,
+	}, log)
 	if err != nil {
+		log.Warn("control channel unavailable, signals only", slog.String("err", err.Error()))
+		stopControl = func() {}
+	} else {
+		log.Info("control channel up")
+	}
+	var stopControlOnce sync.Once
+	closeControl := func() { stopControlOnce.Do(stopControl) }
+	defer closeControl()
+
+	d, runTelegram, closeAll, err := wire.buildDaemon(runCtx, env, cfg, log, fatal, start.retry(ctx, env))
+	if err != nil {
+		if ctlCtx.Err() != nil {
+			// A stop action or signal while waiting for Telegram: a normal
+			// stop, not a failed start.
+			log.Info("daemon stopped before Telegram answered", slog.Int("attempts", start.attempts()),
+				slog.String("err", err.Error()))
+			return exitOK
+		}
 		log.Error("daemon build failed", slog.String("err", err.Error()))
 		fmt.Fprintf(rc.stderr, "herdr-tg daemon: %v\n", err)
 		nctx, ncancel := context.WithTimeout(ctx, daemonNotifyTimeout)
@@ -100,24 +128,14 @@ func runDaemon(rc *runContext, _ []string) int {
 		return exitError
 	}
 	defer closeAll()
+	// Deferred after closeAll so it runs first: the control channel closes
+	// before the Herdr connection, as when it started after the build.
+	defer closeControl()
 	d.Version = rc.version
+	start.ready(d)
 
 	stopResync := watchResync(d.Resync, log)
 	defer stopResync()
-
-	// The control channel serves stop, resync and status on every
-	// platform; on Unix the signal handlers above stay as the fallback for
-	// an action from an older build.
-	stopControl, err := wire.startControl(ctlCtx, env, compose.ControlHandlers{
-		Stop:   requestStop,
-		Resync: d.Resync,
-		Status: func() string { return compose.StatsLine(statsWithPID(d.Stats(), os.Getpid()), time.Now()) },
-	}, log)
-	if err != nil {
-		log.Warn("control channel unavailable, signals only", slog.String("err", err.Error()))
-	} else {
-		defer stopControl()
-	}
 
 	runErr := runWithTelegram(ctx, runCtx, d.Run, func(ctx context.Context) {
 		d.SetTelegramReady(true)
@@ -167,4 +185,82 @@ func runWithTelegram(parent, runCtx context.Context, run func(context.Context) e
 		log.Warn("telegram runner did not stop in time, exiting anyway", slog.Int64("dur_ms", time.Since(start).Milliseconds()))
 	}
 	return err
+}
+
+// startupState answers the control channel while the daemon is still
+// reaching Telegram and hands over to the daemon once it is built.
+type startupState struct {
+	since   time.Time
+	version string
+	log     *slog.Logger
+
+	mu      sync.Mutex
+	attempt int
+	daemon  *compose.Daemon
+}
+
+// retry is the Telegram startup policy with the daemon's reporting: the
+// attempt count for status, one Herdr notice when the first attempt fails
+// and one when Telegram answers after a wait.
+func (s *startupState) retry(ctx context.Context, env compose.PluginEnv) compose.TelegramStartRetry {
+	retry := compose.DefaultTelegramStartRetry()
+	retry.OnWait = func(w compose.TelegramStartWait) {
+		s.mu.Lock()
+		s.attempt = w.Attempt
+		s.mu.Unlock()
+		s.log.Debug("daemon waiting for telegram", slog.Int("attempt", w.Attempt), slog.Int64("wait_ms", w.Wait.Milliseconds()))
+		if w.Attempt == 1 {
+			nctx, ncancel := context.WithTimeout(ctx, daemonNotifyTimeout)
+			notify(nctx, env, "Telegram Agents is waiting for Telegram ("+w.Reason+"); retrying, see the status action", s.log)
+			ncancel()
+		}
+	}
+	retry.OnReady = func(_ int, waited time.Duration) {
+		nctx, ncancel := context.WithTimeout(ctx, daemonNotifyTimeout)
+		notify(nctx, env, "Telegram Agents reached Telegram after "+waited.Round(time.Second).String(), s.log)
+		ncancel()
+	}
+	return retry
+}
+
+// attempts is the number of failed Telegram attempts so far.
+func (s *startupState) attempts() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.attempt
+}
+
+// ready hands status and resync over to the built daemon.
+func (s *startupState) ready(d *compose.Daemon) {
+	s.mu.Lock()
+	s.daemon = d
+	attempts := s.attempt
+	s.mu.Unlock()
+	s.log.Debug("daemon ready, control channel handed over", slog.Int("telegram_failures", attempts))
+}
+
+// status is the control channel's status reply: the daemon's line once it
+// runs, the starting line before.
+func (s *startupState) status() string {
+	s.mu.Lock()
+	d, attempt := s.daemon, s.attempt
+	s.mu.Unlock()
+	now := time.Now()
+	if d != nil {
+		return compose.StatsLine(statsWithPID(d.Stats(), os.Getpid()), now)
+	}
+	return compose.StartingLine(s.version, os.Getpid(), s.since, attempt, now)
+}
+
+// resync forwards to the daemon; before it is built there is nothing to
+// resync, and the build syncs everything anyway.
+func (s *startupState) resync() {
+	s.mu.Lock()
+	d := s.daemon
+	s.mu.Unlock()
+	if d == nil {
+		s.log.Debug("resync ignored: daemon still starting")
+		return
+	}
+	d.Resync()
 }

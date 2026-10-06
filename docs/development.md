@@ -153,6 +153,20 @@ first contacts before the library advances its polling offset. Retained messages
 can register contacts, while pre-start mutating messages and old callbacks are
 refused. This does not provide exactly-once agent effects across crashes.
 
+The client gives every request 60 s (`httpTimeout` in
+`internal/adapters/telegram/connect.go`) and asks Telegram to hold
+`getUpdates` for 49 s (`pollTimeout` 50 s; the library subtracts one
+second). The hold must stay well under the deadline: with 59 s against
+60 s a held poll answered a little late died with `Client.Timeout exceeded
+while awaiting headers`. At startup `Connect` retries the token check and
+the icon pack (`StartRetry`) until they succeed, fail for good
+(`isRetryable` false: 401, 400, 403, 404) or the daemon is stopped; the
+control channel is up before the build, and a waiting daemon reports
+`telegram=waiting attempt=N`, never `telegram=ready`, so the update
+worker's health check keeps waiting. `BuildDaemon` pings Herdr first, so a
+missing socket still fails the start at once, and opens the Herdr event
+stream only after Telegram answered: nothing would read it during the wait.
+
 Sharing audit logs contain IDs, revisions, actions and outcome flags. Keep new
 logs free of tokens, message bodies, attachment names/content, transcript paths
 and raw session IDs. Use the existing `LOG_LEVEL` setting for DEBUG diagnostics.

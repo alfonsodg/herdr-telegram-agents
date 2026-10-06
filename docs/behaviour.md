@@ -719,6 +719,25 @@ in `config.json`:
   the window are dropped at debug only. `doctor` counts both lists in its
   config line (`1 operator, 2 observers`).
 
+## Starting without a network
+
+A daemon that starts before the network is up (login, wake from sleep)
+keeps trying Telegram instead of exiting: nothing would start it again.
+Each attempt checks the token, clears the webhook and loads the topic
+icons, together at most 15 s; the waits between attempts are 2 s, 4 s, 8 s
+and so on up to a minute, longer when Telegram answers 429 with a
+`retry_after`. Herdr shows one notice at the first failure (`Telegram
+Agents is waiting for Telegram (<reason>); retrying, see the status
+action`) and one when Telegram answers (`… reached Telegram after 2m10s`);
+`daemon.log` has a `telegram unreachable, retrying` warning per attempt.
+
+While it waits, `status` answers `version=… pid=… uptime=… telegram=waiting
+attempt=N` (`telegram=connecting` before the first failure) and `stop` ends
+the daemon cleanly, with exit code 0 and no "could not start" notice. A
+rejected token (401), a request Telegram refuses (400, 403, 404) or a
+broken Herdr socket still stop the start at once with `Telegram Agents could
+not start: …`.
+
 ## Files, logs and state
 
 | File | Location | Content |
@@ -748,7 +767,10 @@ A daemon from an older build that does not answer still receives SIGTERM or
 SIGHUP on Unix and is killed if it answers neither. The `status` action prints
 the daemon's own line: `version=… pid=… uptime=… agents=… dropped=… herdr=ok|failing
 since … sync=on|off cleanup=<n>d|off quiet=on|away|away-manual|off
-pager=on|off|unreachable telegram=ready` while polling has started.
+pager=on|off|unreachable telegram=ready` while polling has started. A
+daemon still reaching Telegram answers `version=… pid=… uptime=…
+telegram=connecting|waiting attempt=N` instead; see [Starting without a
+network](#starting-without-a-network).
 
 `LOG_LEVEL=debug|info|warn|error` in Herdr's environment overrides the level
 saved in `config.json` (default `info`). The daemon writes JSON lines to

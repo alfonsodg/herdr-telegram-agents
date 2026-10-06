@@ -251,6 +251,9 @@ other detailed evidence were supplied for this record.
 - [x] **Flapping socket**: repeatedly interrupting the socket makes the retry delay climb (`herdr stream reset` with a rising `attempt` and `retry_ms`), and a stable connection resets it
 - [x] **Socket gone**: stop Herdr for more than 60 s; the daemon posts the "socket unreachable" notice to General and exits cleanly
 - [x] **Network loss**: disable Wi-Fi for two minutes; the Telegram poller recovers and queued edits go out afterwards
+- [ ] **Start without a network**: with Wi-Fi off, start the daemon; Herdr shows one `waiting for Telegram` notice, `status` answers `telegram=waiting attempt=N` with a rising N, `daemon.log` has `telegram unreachable, retrying`; Wi-Fi on → `reached Telegram after …` notice and the topics sync
+- [ ] **Stop while waiting**: with Wi-Fi off, start the daemon and run `stop` before Wi-Fi returns; the daemon exits 0 with `daemon stopped before Telegram answered` in the log and no `could not start` notice (macOS and Windows: on Windows the stop goes through the control channel, not a kill)
+- [ ] **Long poll**: after a day of polling, `daemon.log` has no `Client.Timeout exceeded while awaiting headers` for `getUpdates` (the hold is 49 s against a 60 s deadline)
 - [x] **Rights**: revoke **Manage topics**, see the General notice and paused edits, restore it and see edits resume
 - [x] **Bot removed**: removing the bot from the group ends the daemon with a Herdr notification
 - [x] **Many agents**: with a dozen or more agents changing status at once, the log shows no `bridge dropped jobs` warning and `status` reports `dropped=0`

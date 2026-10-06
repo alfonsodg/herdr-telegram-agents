@@ -464,6 +464,29 @@ func TestOutboundOpenCodeExportTimeoutFallsBackToScreen(t *testing.T) {
 	}
 }
 
+// TestOutboundOpenCodePendingReplyPostsNothing: a done post whose reply is
+// an in-flight turn fragment must post nothing at all — no fragment, no
+// screen tail — and leave the real turn end to produce the full answer.
+func TestOutboundOpenCodePendingReplyPostsNothing(t *testing.T) {
+	f := newBridgeFixture(t)
+	if err := f.opts.Set(f.ctx, domain.OptionPostsDone, string(domain.DoneFormatted), 1); err != nil {
+		t.Fatal(err)
+	}
+	a := f.add(t, "p1", "t1", "a", domain.StatusWorking)
+	a.Kind = "opencode"
+	f.agents[a.Key] = a
+	f.herdr.SetScreen("p1", "terminal fallback")
+	f.replies.Fail(a.Key, fmt.Errorf("%w: the turn is still running", domain.ErrReplyPending))
+	f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusDone)})
+	f.fire(t, 1)
+	if len(f.herdr.Reads()) != 0 || len(f.tg.Sent()) != 0 {
+		t.Fatalf("pending reply must post nothing: reads %v, sent %v", f.herdr.Reads(), f.tg.Sent())
+	}
+	if !strings.Contains(f.logBuf.String(), "reply not ready, post skipped") {
+		t.Fatalf("skip not logged: %s", f.logBuf.String())
+	}
+}
+
 func TestOutboundOpenCodeExportTimeoutDoneModes(t *testing.T) {
 	for _, mode := range []domain.DoneMode{domain.DoneReply, domain.DoneFormatted, domain.DoneScreen} {
 		t.Run(string(mode), func(t *testing.T) {

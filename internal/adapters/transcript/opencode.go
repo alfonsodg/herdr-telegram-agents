@@ -205,10 +205,36 @@ func openCodeLastReply(messages []openCodeMessage) (string, domain.TurnMeta, err
 			}
 		}
 	}
+	if !openCodeTurnSettled(messages[start:]) {
+		return "", domain.TurnMeta{}, fmt.Errorf("%w: the turn is still running", domain.ErrReplyPending)
+	}
 	if len(texts) == 0 {
 		return "", domain.TurnMeta{}, fmt.Errorf("%w: no text after the last prompt", domain.ErrNoReply)
 	}
 	return strings.Join(texts, "\n\n"), meta, nil
+}
+
+// openCodeTurnSettled reports whether the newest activity in the window is
+// text rather than tool work. opencode completes a message (and can report
+// a done or idle status) at every step, so a read whose last part is a
+// tool call must not post that step as the turn's answer.
+func openCodeTurnSettled(ms []openCodeMessage) bool {
+	textPos, toolPos := -1, -1
+	pos := 0
+	for _, m := range ms {
+		for _, p := range m.parts() {
+			pos++
+			switch p.Type {
+			case "text":
+				if strings.TrimSpace(p.Text) != "" {
+					textPos = pos
+				}
+			case "tool":
+				toolPos = pos
+			}
+		}
+	}
+	return textPos >= 0 && textPos > toolPos
 }
 
 func (m openCodeMessage) role() string {

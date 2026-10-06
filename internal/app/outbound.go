@@ -621,6 +621,12 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompleti
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return err
 		}
+		// A pending reply means the turn is not over: posting now would send
+		// a fragment or a screen tail. The real turn end will post instead.
+		if errors.Is(err, domain.ErrReplyPending) && status == domain.StatusDone {
+			o.log.Debug("reply not ready, post skipped", slog.String("key", key.String()))
+			return nil
+		}
 		logErr := err
 		if agent.Kind == "opencode" && err != nil {
 			logErr = fmt.Errorf("reply unavailable")

@@ -82,6 +82,9 @@ const (
 	// presenceAwayUntil and presenceAwayOpen answer /away.
 	presenceAwayUntil = "🏃 away until %s, Telegram gets everything; /here returns to automatic"
 	presenceAwayOpen  = "🏃 away until /here, Telegram gets everything"
+	// presenceAwayNone answers /away where the platform has no idle source:
+	// quiet never engages there, so there is nothing to lift.
+	presenceAwayNone = "quiet mode is not available on this platform, Telegram already gets everything"
 	// presenceHereFmt answers /here with the automatic verdict.
 	presenceHereFmt     = "🖥 presence is automatic again: %s"
 	presenceVerdictDesk = "at the desk, quiet on"
@@ -824,6 +827,9 @@ func (i *inbound) away(d time.Duration, by int64) string {
 		return presenceUnavailable
 	case !i.opts.QuietEnabled():
 		return presenceOff
+	case !i.presence.State().Supported:
+		i.log.Debug("away refused: no idle source", slog.Int64("by", by))
+		return presenceAwayNone
 	}
 	st := i.presence.Away(d, by)
 	i.log.Debug("away applied", slog.Int64("by", by), slog.Time("until", st.Until), slog.String("word", st.Word()))

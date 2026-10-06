@@ -694,6 +694,12 @@ func TestInboundPresenceUnavailableAndTopicHint(t *testing.T) {
 	if got := general(f, t, 2, "/here"); got != "🖥 presence is automatic again: not available on this platform" {
 		t.Fatalf("/here on unsupported platform = %q", got)
 	}
+	if got := general(f, t, 3, "/away 2h"); got != presenceAwayNone {
+		t.Fatalf("/away on unsupported platform = %q", got)
+	}
+	if st := p.State(); st.ManualAway || !st.Until.IsZero() {
+		t.Fatalf("/away on unsupported platform changed the state: %+v", st)
+	}
 	f.add(t, "p1", "t1", "alpha", domain.StatusIdle)
 	for id, text := range map[int]string{5: "/away", 6: "/here"} {
 		if err := f.in.HandleTopic(f.ctx, topicMsg(101, id, text)); err != nil {

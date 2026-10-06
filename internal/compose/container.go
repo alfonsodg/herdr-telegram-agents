@@ -401,7 +401,7 @@ func BuildDaemon(ctx context.Context, env PluginEnv, cfg domain.Config, log *slo
 		app.Services{Replies: domain.MultiReplySource{
 			transcript.NewReader(log),
 			transcript.NewOpenCodeReader(hg.AgentSession, system.NewOpenCodeExporter(log).Export, log),
-			transcript.NewCodexReader(hg.AgentSession, log),
+			transcript.NewCodexDirectoryReader(transcript.NewCodexReader(hg.AgentSession, log), log),
 			transcript.NewMuseReader(log),
 			transcript.NewAgyReader(hg.AgentSession, log),
 		}, Git: system.NewGitRunner(log), Inbox: inbox, Config: state.NewConfigStore(env.ConfigDir, log),

@@ -3,7 +3,15 @@ package domain
 import (
 	"context"
 	"errors"
+	"fmt"
 )
+
+// ErrReplyPending reports a turn that has not settled yet: its newest
+// record is tool work or it has no assistant text after the last prompt,
+// so a read taken now would return a fragment. It wraps ErrNoReply, so
+// callers that cannot wait treat it as "no reply"; the done-post path
+// skips the post entirely and lets the real turn end produce the answer.
+var ErrReplyPending = fmt.Errorf("%w: reply not ready yet", ErrNoReply)
 
 // MultiReplySource tries each source in order and returns the first reply
 // that isn't ErrNoReply. Every source is expected to reject agent kinds it

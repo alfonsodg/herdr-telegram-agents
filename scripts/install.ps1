@@ -74,11 +74,11 @@ try {
     }
     Write-Host "install: checksum ok"
 
-    Move-Item -Force $tmp "bin\herdr-tg.exe"
+    Move-Item -Force -LiteralPath $tmp -Destination "bin\herdr-tg.exe"
     Write-Host "install: installed bin\herdr-tg.exe"
 } finally {
-    if (Test-Path $tmp) { Remove-Item -Force $tmp }
-    if (Test-Path $sums) { Remove-Item -Force $sums }
+    if (Test-Path -LiteralPath $tmp) { Remove-Item -Force -LiteralPath $tmp }
+    if (Test-Path -LiteralPath $sums) { Remove-Item -Force -LiteralPath $sums }
 }
 
 & ".\bin\herdr-tg.exe" version

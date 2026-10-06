@@ -403,6 +403,7 @@ func BuildDaemon(ctx context.Context, env PluginEnv, cfg domain.Config, log *slo
 			transcript.NewOpenCodeReader(hg.AgentSession, system.NewOpenCodeExporter(log).Export, log),
 			transcript.NewCodexReader(hg.AgentSession, log),
 			transcript.NewMuseReader(log),
+			transcript.NewAgyReader(hg.AgentSession, log),
 		}, Git: system.NewGitRunner(log), Inbox: inbox, Config: state.NewConfigStore(env.ConfigDir, log),
 			Updates: BuildUpdateManager(env, log), UpdateJobs: state.NewUpdateStore(env.StateDir, log),
 			LaunchUpdate:  func(ctx context.Context, id string) (int, error) { return LaunchUpdateWorker(ctx, env, id, log) },

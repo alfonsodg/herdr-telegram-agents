@@ -184,6 +184,29 @@ func TestOpenCodeLastReplyCancelled(t *testing.T) {
 	}
 }
 
+// TestOpenCodeLastReplyTurnStillRunning: opencode completes a message and
+// can report done/idle at every step, so a read whose newest record is tool
+// work (or has no assistant text yet) must answer ErrReplyPending instead
+// of a fragment.
+func TestOpenCodeLastReplyTurnStillRunning(t *testing.T) {
+	for name, out := range map[string]string{
+		"last record is a tool": `{"info":{"id":"ses_abc"},"messages":[
+			{"info":{"role":"user","time":{"created":1}},"parts":[{"type":"text","text":"go"}]},
+			{"info":{"role":"assistant","time":{"created":2,"completed":3}},"parts":[{"type":"text","text":"first step"}]},
+			{"info":{"role":"assistant","time":{"created":4}},"parts":[{"type":"tool","tool":"bash","state":{"status":"completed"}}]}]}`,
+		"no assistant text yet": `{"info":{"id":"ses_abc"},"messages":[
+			{"info":{"role":"user","time":{"created":1}},"parts":[{"type":"text","text":"go"}]}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &openCodeFixture{tuple: openCodeTuple, out: out}
+			_, err := f.reader().LastReply(context.Background(), openCodeAgent(openCodeTuple.Digest()))
+			if !errors.Is(err, domain.ErrReplyPending) {
+				t.Fatalf("err = %v, want ErrReplyPending", err)
+			}
+		})
+	}
+}
+
 func TestOpenCodeLastReplySafeFailures(t *testing.T) {
 	secret := "ses_private secret_private"
 	for _, tc := range []struct {

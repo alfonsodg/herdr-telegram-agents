@@ -20,7 +20,7 @@ func TestRun(t *testing.T) {
 		{name: "version", args: []string{"version"}, wantCode: 0, wantStdout: "herdr-tg 1.2.3 "},
 		{name: "startup outside herdr", args: []string{"startup"}, wantCode: 1, wantStderr: "HERDR_PLUGIN_CONFIG_DIR"},
 		{name: "action without id", args: []string{"action"}, wantCode: 2, wantStderr: "usage: herdr-tg action"},
-		{name: "event not implemented", args: []string{"event"}, wantCode: 2, wantStderr: "herdr-tg event: not implemented yet"},
+		{name: "event is not a subcommand", args: []string{"event"}, wantCode: 2, wantStderr: `unknown subcommand "event"`},
 	}
 	t.Setenv("HERDR_PLUGIN_CONFIG_DIR", "")
 	t.Setenv("HERDR_PLUGIN_STATE_DIR", "")
@@ -46,6 +46,16 @@ func TestUsageHidesDev(t *testing.T) {
 	Run(nil, "dev", &bytes.Buffer{}, &stderr)
 	if strings.Contains(stderr.String(), "dev ") {
 		t.Errorf("usage must not document the dev subcommand:\n%s", stderr.String())
+	}
+}
+
+// TestUsageDoesNotAdvertiseEvent: the event hook is not implemented, so the
+// usage must not offer it as a subcommand.
+func TestUsageDoesNotAdvertiseEvent(t *testing.T) {
+	var stderr bytes.Buffer
+	Run(nil, "dev", &bytes.Buffer{}, &stderr)
+	if out := stderr.String(); strings.Contains(out, "[[events]]") || strings.Contains(out, "\n  event ") {
+		t.Errorf("usage advertises the unimplemented event subcommand:\n%s", out)
 	}
 }
 

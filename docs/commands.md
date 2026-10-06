@@ -165,7 +165,7 @@ and the commands appear in Telegram's `/` menu for the group.
 
 | You write | What happens |
 |-----------|--------------|
-| `/status` | every live agent with its status emoji, a link to its topic and, once known, how long it has been in that status (`· 12 min`); the first line says when quiet mode is holding edits (`🔕 …`), when you are away by hand (`🏃 …`) or when sync is off (`🔇 …`). The same text, with an `updated HH:MM` footer, is the pinned dashboard; see [The dashboard](behaviour.md#the-dashboard) |
+| `/status` | every live agent with its status emoji, a link to its topic and, once known, how long it has been in that status (`· 12 min`); the first line says when quiet mode is holding edits (`🔕 …`), when you are away by hand (`🏃 …`) or when sync is off (`🔇 …`). The same text, with an `updated HH:MM` footer, is the pinned dashboard, which stops at 40 agents with `… +N more` to stay one editable message; see [The dashboard](behaviour.md#the-dashboard) |
 | `/options` | the settings panel: sync, quiet mode, status icons, secret redaction, topic cleanup, and a two-press plugin update action; see [Options](behaviour.md#options) and [Plugin updates](behaviour.md#plugin-updates) |
 | `/away`, `/away 2h` | you count as away until `/here`, or for that long (any Go duration from `1m` to `168h`): held topic edits and posts go out at once; see [Quiet while at the desk](behaviour.md#quiet-while-at-the-desk) |
 | `/here` | presence is automatic again; the reply says the current verdict |

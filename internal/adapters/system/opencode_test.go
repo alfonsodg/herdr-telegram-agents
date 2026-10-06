@@ -162,3 +162,27 @@ func TestOpenCodeExporterRejectsBadSessionID(t *testing.T) {
 		}
 	}
 }
+
+// TestOpenCodeExporterUsesAFileForStdout: opencode silently truncates its
+// JSON when stdout is a pipe (64 KiB multiples, exit 0), so the export must
+// run against a regular file that is removed afterwards.
+func TestOpenCodeExporterUsesAFileForStdout(t *testing.T) {
+	e := NewOpenCodeExporter(nil)
+	e.bin = fakeOpenCode(t, `printf '{"messages":[]}'`)
+	var name string
+	e.run = func(cmd *exec.Cmd) error {
+		f, ok := cmd.Stdout.(*os.File)
+		if !ok {
+			t.Fatalf("stdout is %T, want *os.File: opencode truncates piped output", cmd.Stdout)
+		}
+		name = f.Name()
+		return cmd.Run()
+	}
+	out, err := e.Export(context.Background(), "ses_abc")
+	if err != nil || string(out) != `{"messages":[]}` {
+		t.Fatalf("Export = %q, %v", out, err)
+	}
+	if _, statErr := os.Stat(name); !os.IsNotExist(statErr) {
+		t.Fatalf("temp file left behind (%s): %v", name, statErr)
+	}
+}

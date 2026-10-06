@@ -273,7 +273,21 @@ option of the Posts group:
   use short reasons without either. Install Herdr's Codex integration with
   `herdr integration install codex` so Herdr reports `agent_session`. Codex is
   read from the daemon's own home directory (`~/.codex`; `CODEX_HOME` is not
-  honoured), so a Codex running inside WSL is not found.
+  honoured), so a Codex running inside WSL is not found. When Herdr's reported
+  session went stale (the Codex conversation switched inside the pane), the
+  newest rollout of the pane's working directory is used instead if it carries
+  a fresher answer.
+  For Muse Code the daemon reads the newest assistant message from the pane
+  session's durable log, found through the runtime session whose workspace
+  label matches the working directory's basename
+  (`~/.local/share/muse/sessions/…/session.jsonl`, tail-scanned within the
+  same 4 MiB budget).
+  For Antigravity (`agy`) it reads the model's last answer from the pane
+  conversation's transcript
+  (`~/.gemini/antigravity-cli/brain/<conversation>/…/transcript.jsonl`,
+  `transcript_full.jsonl` as fallback); Herdr reports the conversation id.
+  For OpenCode, a read whose newest record is tool work posts nothing at all:
+  the real turn end posts the complete answer.
 - **Formatted** (default): the same reply rendered for Telegram: headings become bold,
   `- ` lists become `•`, quotes get a bar, `[text](url)` becomes a link,
   inline code and fenced blocks keep their monospace, pipe tables are
@@ -281,8 +295,9 @@ option of the Posts group:
   are split and stop after five messages with `… (+N chars)` at the end.
   Should Telegram reject the markup (`can't parse entities`), that part is
   sent once more as a plain code block and the log says so. An agent with
-  no readable reply (any kind other than Claude Code, Codex and OpenCode,
-  or a missing or stale transcript) gets the screen post instead.
+  no readable reply (any kind other than Claude Code, Codex, OpenCode, Muse
+  and Antigravity, or a missing or stale transcript) gets the screen post
+  instead.
 
 `Formatted` has been the default since 2026-10-01; before that it was
 `Screen`. `options.json` stores every option once the panel has saved it,

@@ -34,6 +34,13 @@ func (m MultiReplySource) LastReply(ctx context.Context, agent Agent) (Reply, er
 		if err == nil {
 			return r, nil
 		}
+		// A pending reply must reach the caller: it is not "this source
+		// cannot answer", it is "the turn is not over yet", and the
+		// done-post path must skip and retry instead of falling back to
+		// the screen of a fragment.
+		if errors.Is(err, ErrReplyPending) {
+			return Reply{}, err
+		}
 		if !errors.Is(err, ErrNoReply) {
 			return Reply{}, err
 		}

@@ -622,9 +622,11 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompleti
 			return err
 		}
 		// A pending reply means the turn is not over: posting now would send
-		// a fragment or a screen tail. The real turn end will post instead.
+		// a fragment or a screen tail. Retry shortly so the settled answer
+		// is not lost when no further status change follows.
 		if errors.Is(err, domain.ErrReplyPending) && status == domain.StatusDone {
 			o.log.Debug("reply not ready, post skipped", slog.String("key", key.String()))
+			o.deb.ScheduleAfter(key, pendingRetryDelay)
 			return nil
 		}
 		logErr := err

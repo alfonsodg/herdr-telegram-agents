@@ -110,6 +110,11 @@ const (
 	typingTimeout = 10 * time.Minute
 	// typingHeadRunes is how much of the typed text the ✅ ✏️ button shows.
 	typingHeadRunes = 30
+	// pendingRetryDelay re-reads a reply whose turn is not over yet: the
+	// done post is skipped and retried after this delay instead of falling
+	// back to a fragment or losing the post when no further status change
+	// follows.
+	pendingRetryDelay = 3 * time.Second
 	// gitInlineRunes is the longest /git output posted as a message; longer
 	// output goes out as a document.
 	gitInlineRunes = 3600

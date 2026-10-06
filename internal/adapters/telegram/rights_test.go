@@ -105,6 +105,19 @@ func TestConnect(t *testing.T) {
 	if got := api.callsOf("createForumTopic"); len(got) != 1 || got[0].form.Get("icon_custom_emoji_id") != "bolt" {
 		t.Fatalf("createForumTopic calls = %v", got)
 	}
+	// The HTTP client gives up after 60 s, so Telegram must be asked to hold
+	// the long poll no longer than 49 s (getUpdates "timeout", in seconds).
+	deadline := time.Now().Add(2 * time.Second)
+	for len(api.callsOf("getUpdates")) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	polls := api.callsOf("getUpdates")
+	if len(polls) == 0 {
+		t.Fatal("no getUpdates call")
+	}
+	if got := polls[0].form.Get("timeout"); got != "49" {
+		t.Fatalf("getUpdates timeout = %q, want 49 (held well inside the 60 s HTTP deadline)", got)
+	}
 	cancel()
 	select {
 	case <-done:

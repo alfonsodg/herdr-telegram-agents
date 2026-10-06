@@ -68,7 +68,7 @@ Anything you write in a topic reaches the agent:
 | `/stop` | `esc` through `agent.send_keys`, in any status: Claude Code cancels the running turn or dismisses the open dialog; the reply is `⏹ sent esc` |
 | `/interrupt` | `ctrl+c` through `agent.send_keys`, in any status: a hard interrupt; the reply is `⛔ sent ctrl+c` |
 | `/close` | the question `Close <label>? The pane and its tab go away.` with `Yes, close` / `No` buttons; `Yes` closes the pane through `pane.close` (the tab goes with it when it held nothing else) and the topic gets 🏁 through the usual exit path; `No` keeps everything. Only the latest question of an agent acts; see [Questions and buttons](behaviour.md#questions-and-buttons) |
-| `/clear`, `/compact [instructions]`, `/usage`, `/model [name]` | typed into the agent as its own Claude Code command; two seconds later the screen is posted as a quoted reply (`/usage` and a bare `/model` are closed with `esc` for you); only while the agent is idle |
+| `/clear`, `/compact [instructions]`, `/usage`, `/model [name]`, `/models` | typed into the agent as its own command; two seconds later the screen is posted as a quoted reply (`/usage` and a bare `/model` are closed with `esc` for Claude Code only); only while the agent is idle |
 | `/status` | `<emoji> <status> · <label> · pane <id>` |
 | `/options` | a hint: the settings panel lives in General |
 | `/away`, `/here`, `/new`, `/observers` | a hint: these commands live in General |
@@ -95,7 +95,9 @@ blocked is refused with a hint, because the text would land in the running
 turn or in a dialog and the `esc` could interrupt it; Herdr's detection dips
 out of **working** for a second or two while a tool runs, so a refusal can be
 spurious, just send the command again. Agents of other kinds (Codex, Gemini)
-get the same text as-is and the screen post shows how they reacted.
+get the same text as-is and the screen post shows how they reacted. `/models`
+(OpenCode's model picker) is forwarded the same way and, like every non-Claude
+picker, stays open for `/keys` (`down`, `up`, `enter`) to drive.
 
 ## Agent control
 

@@ -98,14 +98,16 @@ type ForwardRule struct {
 	Dismiss bool
 }
 
-// forwardRules maps the Claude Code commands an operator may send from a
-// topic to their follow-up. A word missing here stays an unknown command,
-// so a typo in a plugin command never reaches the agent as a prompt.
+// forwardRules maps the commands an operator may send from a topic to their
+// follow-up. The Claude Code words and OpenCode's /models picker are here; a
+// word missing from the list stays an unknown command, so a typo in a plugin
+// command never reaches the agent as a prompt.
 var forwardRules = map[string]ForwardRule{
 	"clear":   {Post: ForwardPostTail},
 	"compact": {Post: ForwardPostNone},
 	"usage":   {Post: ForwardPostScreen, Dismiss: true},
 	"model":   {Post: ForwardPostScreen, Dismiss: true},
+	"models":  {Post: ForwardPostScreen},
 }
 
 // forwardRuleFor resolves the rule for a slash word; /model with a name

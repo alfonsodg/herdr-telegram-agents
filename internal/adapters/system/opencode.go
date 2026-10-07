@@ -26,13 +26,19 @@ const (
 
 // OpenCodeExporter runs OpenCode's session export command from the binary on
 // PATH and returns its JSON. The session id Herdr reported for the pane is
-// passed as one argument, never through a shell.
+// passed as one argument, never through a shell. On OpenCode 2.x the newest
+// turn is read from opencode's own database when available; the export
+// command remains the fallback.
 type OpenCodeExporter struct {
 	bin      string
 	timeout  time.Duration
 	maxBytes int
 	log      *slog.Logger
 	run      func(*exec.Cmd) error
+	// sqlite and dbPath read the session's last turn from opencode's store.
+	// nil disables the database shortcut.
+	sqlite func(ctx context.Context, dbPath, query string) ([]byte, error)
+	dbPath func() (string, error)
 }
 
 // NewOpenCodeExporter returns an exporter for "opencode" on PATH.
@@ -40,7 +46,10 @@ func NewOpenCodeExporter(log *slog.Logger) *OpenCodeExporter {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &OpenCodeExporter{bin: "opencode", timeout: openCodeExportTimeout, maxBytes: openCodeExportMaxOutput, log: log}
+	return &OpenCodeExporter{
+		bin: "opencode", timeout: openCodeExportTimeout, maxBytes: openCodeExportMaxOutput, log: log,
+		sqlite: runOpenCodeSQLite, dbPath: defaultOpenCodeDBPath,
+	}
 }
 
 // Export runs the export for sessionID. A missing binary, a timeout, a
@@ -51,6 +60,13 @@ func (e *OpenCodeExporter) Export(ctx context.Context, sessionID string) ([]byte
 	}
 	if sessionID == "" || strings.HasPrefix(sessionID, "-") {
 		return nil, fmt.Errorf("opencode export: invalid session id")
+	}
+	if out, err := e.exportFromDB(ctx, sessionID); err == nil {
+		return out, nil
+	} else if parentErr := ctx.Err(); parentErr != nil {
+		return nil, fmt.Errorf("opencode export: %w", parentErr)
+	} else {
+		e.log.Debug("opencode db read unavailable", slog.String("reason", err.Error()))
 	}
 	bin, err := exec.LookPath(e.bin)
 	if err != nil {

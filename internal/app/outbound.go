@@ -1413,10 +1413,10 @@ func (o *outbound) Screen(ctx context.Context, key domain.Key, lines int) error 
 // screenReplyKind reports whether a bare /screen posts the agent's reply
 // instead of the screen. OpenCode draws a multi-column TUI that scrapes into
 // scrambled text; a Codex answer can be taller than the screen and would be
-// cut, and so can an Antigravity (agy) answer, which is long markdown. Claude
-// Code and the other kinds keep the screen.
+// cut, and so can an Antigravity (agy) or pi answer, which is long markdown.
+// Claude Code and the other kinds keep the screen.
 func screenReplyKind(kind string) bool {
-	return kind == "opencode" || kind == "codex" || kind == "agy"
+	return kind == "opencode" || kind == "codex" || kind == "agy" || kind == "pi"
 }
 
 // replyScreen tries the agent's reply source for a bare /screen post. ok

@@ -249,9 +249,9 @@ func BuildSupervisor(env PluginEnv, log *slog.Logger) *Supervisor {
 
 // replySources is the reader chain behind done posts and /screen: Claude
 // Code transcripts by working directory, then the exact-session OpenCode
-// export, Codex rollout and Antigravity transcript. Each reader rejects the
-// kinds it does not know with ErrNoReply, and the chain keeps a reader's
-// ErrReplyPending over a later reader's "unsupported agent".
+// export, Codex rollout, Antigravity transcript and pi session file. Each
+// reader rejects the kinds it does not know with ErrNoReply, and the chain
+// keeps a reader's ErrReplyPending over a later reader's "unsupported agent".
 func replySources(session func(context.Context, string) (domain.SessionTuple, error),
 	openCodeExport func(context.Context, string) ([]byte, error), log *slog.Logger) domain.MultiReplySource {
 	return domain.MultiReplySource{
@@ -259,6 +259,7 @@ func replySources(session func(context.Context, string) (domain.SessionTuple, er
 		transcript.NewOpenCodeReader(session, openCodeExport, log),
 		transcript.NewCodexReader(session, log),
 		transcript.NewAgyReader(session, log),
+		transcript.NewPiReader(session, log),
 	}
 }
 

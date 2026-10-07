@@ -372,7 +372,7 @@ func TestOutboundScreenPrefersFreshReply(t *testing.T) {
 }
 
 func TestOutboundScreenOtherKindsKeepTheScreen(t *testing.T) {
-	for _, kind := range []string{"claude", "gemini", "pi", ""} {
+	for _, kind := range []string{"claude", "gemini", "omp", ""} {
 		f := newBridgeFixture(t)
 		a := f.add(t, "p1", "t1", "a", domain.StatusIdle)
 		a.Kind = kind
@@ -388,13 +388,13 @@ func TestOutboundScreenOtherKindsKeepTheScreen(t *testing.T) {
 	}
 }
 
-// TestOutboundScreenCodexUsesReply covers a bare /screen on Codex and
-// Antigravity (agy): an idle or done agent posts its final answer whole (it
+// TestOutboundScreenCodexUsesReply covers a bare /screen on Codex,
+// Antigravity (agy) and pi: an idle or done agent posts its final answer whole (it
 // can be taller than the screen), a working or blocked one still gets the
 // screen, and /screen N stays a literal screen read.
 func TestOutboundScreenCodexUsesReply(t *testing.T) {
 	answer := "Plan:\n1. Do the **first** thing.\n2. Then the second."
-	for _, kind := range []string{"codex", "agy"} {
+	for _, kind := range []string{"codex", "agy", "pi"} {
 		for _, st := range []domain.Status{domain.StatusIdle, domain.StatusDone, domain.StatusWorking, domain.StatusBlocked} {
 			for _, lines := range []int{0, 10} {
 				screenReplyCase(t, kind, st, lines, answer)

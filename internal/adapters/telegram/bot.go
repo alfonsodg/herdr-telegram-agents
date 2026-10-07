@@ -119,7 +119,7 @@ func Poll(ctx context.Context, b *bot.Bot, log *slog.Logger) {
 var botCommands = []models.BotCommand{
 	{Command: "share", Description: "Share this agent with a private contact"},
 	{Command: "shares", Description: "Manage shared access"},
-	{Command: "screen", Description: "Show screen; idle OpenCode/Codex/agy: last reply (N: screen tail, all: history)"},
+	{Command: "screen", Description: "Show screen; idle OpenCode/Codex/agy/Pi: last reply (N: screen tail, all: history)"},
 	{Command: "keys", Description: "Send raw keys to the agent, e.g. /keys esc"},
 	{Command: "focus", Description: "Bring the agent's pane to the front in Herdr"},
 	{Command: "git", Description: "git status | diff [staged] | log [N] in the agent's directory"},

@@ -96,3 +96,48 @@ func TestReplySourcesReadsAgy(t *testing.T) {
 		})
 	}
 }
+
+// TestReplySourcesReadsPi runs the daemon's real reader chain for a pi pane:
+// the pi reader is last in the chain, a finished turn returns its answer,
+// and a running one reaches the caller as ErrReplyPending rather than as an
+// earlier reader's "unsupported agent".
+func TestReplySourcesReadsPi(t *testing.T) {
+	noExport := func(context.Context, string) ([]byte, error) { return nil, errors.New("not opencode") }
+	header := `{"type":"session","version":3,"id":"0199aaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee","timestamp":"2026-10-07T09:00:00.000Z","cwd":"/work"}`
+	prompt := `{"type":"message","id":"u1","parentId":null,"timestamp":"2026-10-07T09:00:01.000Z","message":{"role":"user","content":"go"}}`
+	for name, tc := range map[string]struct {
+		lines     []string
+		wantText  string
+		wantError error
+	}{
+		"tool last": {lines: []string{header, prompt,
+			`{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-10-07T09:00:02.000Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"bash","arguments":{"command":"ls"}}],"stopReason":"toolUse"}}`},
+			wantError: domain.ErrReplyPending},
+		"settled": {lines: []string{header, prompt,
+			`{"type":"message","id":"a1","parentId":"u1","timestamp":"2026-10-07T09:00:02.000Z","message":{"role":"assistant","content":[{"type":"text","text":"All done."}],"stopReason":"stop"}}`},
+			wantText: "All done."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "sessions", "--work--", "2026-10-07T09-00-00-000Z_s.jsonl")
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(strings.Join(tc.lines, "\n")+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			tuple := domain.SessionTuple{Source: "herdr:pi", Agent: "pi", Kind: "path", Value: path}
+			session := func(context.Context, string) (domain.SessionTuple, error) { return tuple, nil }
+			agent := domain.Agent{Key: domain.Key{PaneID: "p1", TerminalID: "t1", SessionDigest: tuple.Digest()}, Kind: "pi", Cwd: t.TempDir()}
+			r, err := replySources(session, noExport, nil).LastReply(context.Background(), agent)
+			if tc.wantError != nil {
+				if !errors.Is(err, tc.wantError) {
+					t.Fatalf("err = %v, want %v", err, tc.wantError)
+				}
+				return
+			}
+			if err != nil || r.Text != tc.wantText {
+				t.Fatalf("LastReply = %q, %v; want %q", r.Text, err, tc.wantText)
+			}
+		})
+	}
+}

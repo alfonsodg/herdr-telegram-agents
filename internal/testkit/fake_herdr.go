@@ -67,6 +67,7 @@ type FakeHerdr struct {
 	prompts    []string
 	texts      []string
 	screens    map[string]string
+	afterKeys  map[string]string
 	revisions  map[string]int64
 	reads      []ReadCall
 	keys       []KeysCall
@@ -113,6 +114,18 @@ func (f *FakeHerdr) SetScreen(target, text string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.screens[target] = text
+}
+
+// SetScreenAfterKeys makes the next SendKeys call carrying key switch the
+// target's screen to text, so a test can simulate the screen changing once
+// the agent receives the key (a dialog giving way to its text box).
+func (f *FakeHerdr) SetScreenAfterKeys(key, text string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.afterKeys == nil {
+		f.afterKeys = map[string]string{}
+	}
+	f.afterKeys[key] = text
 }
 
 // SetScreenAt scripts the screen text and the revision ReadScreen reports
@@ -347,6 +360,12 @@ func (f *FakeHerdr) SendKeys(_ context.Context, target string, keys []string) er
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.keys = append(f.keys, KeysCall{Target: target, Keys: append([]string(nil), keys...)})
+	for _, k := range keys {
+		if text, ok := f.afterKeys[k]; ok {
+			f.screens[target] = text
+			delete(f.afterKeys, k)
+		}
+	}
 	f.log.Debug("fake herdr send_keys", slog.String("target", target), slog.Any("keys", keys))
 	return f.fail("keys")
 }

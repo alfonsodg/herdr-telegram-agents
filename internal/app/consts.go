@@ -143,6 +143,11 @@ const (
 	unreadableNoticeAfter = 4
 	// unreadableNotice is that notice's text.
 	unreadableNotice = "⚠️ I could not read this agent's replies for several turns and I am posting the screen instead: messages may be incomplete or cut. Check daemon.log for the reason."
+	// blockedFieldPolls and blockedFieldDelay bound the wait for a dialog's
+	// text box to open after its free-text entry is chosen: text is typed
+	// only once the dialog gave way to the box.
+	blockedFieldPolls = 8
+	blockedFieldDelay = 150 * time.Millisecond
 	// gitInlineRunes is the longest /git output posted as a message; longer
 	// output goes out as a document.
 	gitInlineRunes = 3600

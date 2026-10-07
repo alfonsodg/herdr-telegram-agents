@@ -1143,6 +1143,70 @@ func (o *outbound) TypingDone(ctx context.Context, key domain.Key, w typingWait,
 	return o.markTyping(ctx, key, w, "✅ ✏️ · "+headOf(text, typingHeadRunes))
 }
 
+// AnswerBlocked delivers a plain message to a blocked agent without ever
+// typing blind. When the latest keyboard belongs to a dialog with a
+// free-text entry and that dialog is still on screen it repeats the ✏️
+// flow automatically: choose the entry, wait (bounded, re-reading the
+// screen) until the dialog gives way to its text box, type and submit,
+// then mark the keyboard like TypingDone. Anything unexpected (no entry, a
+// changed dialog, no read, no box) sends nothing and reports delivered
+// false so the caller posts a hint.
+func (o *outbound) AnswerBlocked(ctx context.Context, key domain.Key, text string) (bool, error) {
+	kb, ok := o.keyboards[key]
+	if !ok || kb.textEntry == 0 {
+		return false, nil
+	}
+	if !o.blockedDialogStillOpen(ctx, key, kb) {
+		return false, nil
+	}
+	if err := o.herdr.SendKeys(ctx, key.PaneID, []string{strconv.Itoa(kb.textEntry)}); err != nil {
+		return false, err
+	}
+	if !o.waitBlockedField(ctx, key, kb) {
+		o.log.Warn("blocked text not delivered: the text box did not open", slog.String("key", key.String()))
+		return false, nil
+	}
+	if err := o.herdr.SendText(ctx, key.PaneID, text); err != nil {
+		return false, err
+	}
+	o.log.Info("blocked text typed into the dialog", slog.String("key", key.String()),
+		slog.Int("entry", kb.textEntry), slog.Int("chars", len(text)))
+	if err := o.markTyping(ctx, key, typingWait{messageID: kb.messageID}, "✅ ✏️ · "+headOf(text, typingHeadRunes)); err != nil {
+		return true, err
+	}
+	return true, nil
+}
+
+// blockedDialogStillOpen re-reads the screen and reports whether the dialog
+// behind kb is still the one on screen: same choices, multi flag and
+// text-entry number, with a text entry present at all.
+func (o *outbound) blockedDialogStillOpen(ctx context.Context, key domain.Key, kb keyboard) bool {
+	screen, err := o.herdr.ReadScreen(ctx, key.PaneID, domain.ScreenDetection, blockedLines)
+	if err != nil {
+		return false
+	}
+	d := domain.ParseDialog(o.clean(key, screen.Text))
+	return d.TextEntry != 0 && len(d.Choices) == len(kb.choices) && d.Multi == kb.multi && d.TextEntry == kb.textEntry
+}
+
+// waitBlockedField polls the screen until the dialog is no longer there,
+// the chosen text entry having replaced it with its box. A box that never
+// appears (or reads that never succeed) times out; text is never typed
+// then.
+func (o *outbound) waitBlockedField(ctx context.Context, key domain.Key, kb keyboard) bool {
+	for i := 0; i < blockedFieldPolls; i++ {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(blockedFieldDelay):
+		}
+		if !o.blockedDialogStillOpen(ctx, key, kb) {
+			return true
+		}
+	}
+	return false
+}
+
 // CancelTyping ends the open ✏️ wait of key because a command arrived
 // instead of the text; the keyboard says so. Only fatal Telegram errors
 // are returned.

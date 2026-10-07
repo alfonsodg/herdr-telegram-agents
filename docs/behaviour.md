@@ -194,11 +194,16 @@ at DEBUG without screen text; a final failed read produces one WARN.
   default) the status line and the mode hint Claude Code draws under the
   dialog are cut from the post; the dialog's own lines never are, so the
   buttons are found as before.
-- Any other plain message while the agent is blocked is typed into its
-  dialog and submitted with Enter (`pane.send_text` and then
-  `agent.send_keys`), because Herdr refuses `agent.prompt` for an agent
-  waiting at a question or approval UI: the message becomes the dialog's
-  input. Slash commands still run as usual.
+- Any other plain message while the agent is blocked is delivered only when
+  the dialog offers a free-text entry: the daemon repeats the ✏️ flow on
+  its own (re-reads the screen to confirm the same dialog, chooses the
+  entry, waits briefly for the text box, types and submits with Enter, and
+  marks the keyboard with the head of the text). A permission or
+  unrecognised dialog gets nothing — Herdr refuses `agent.prompt` for a
+  blocked agent and typing into a permission dialog could confirm the
+  highlighted option — and the reply is `⚠️ the agent is waiting at a
+  dialog: use the buttons, or /keys; the message was not sent`. Slash
+  commands still run as usual.
 - Pressing ✏️ sends that entry's number, turns the keyboard into `✏️ waiting
   for your text`, answers `now send the text` and posts a quoted `✏️ Type
   something: send the text as your next message` with Telegram's

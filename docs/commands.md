@@ -58,7 +58,7 @@ Anything you write in a topic reaches the agent:
 |-----------|----------------|
 | plain text | typed as a prompt and submitted (`agent.prompt`) |
 | `y`, `n`, `yes`, `no`, `1`..`9`, `enter`, `ok`, `esc` while the agent is blocked | the matching key (`agent.send_keys`); in any other status these are prompts. Pressing a button under the question sends its number the same way |
-| plain text while the agent is blocked | typed into the dialog and submitted with Enter (`pane.send_text` + `agent.send_keys`), because `agent.prompt` refuses an agent waiting at a question or approval UI; see [Questions and buttons](behaviour.md#questions-and-buttons) |
+| plain text while the agent is blocked | only when the dialog has a free-text entry does the daemon repeat the ✏️ flow on its own (choose the entry, wait for the text box, type, Enter, mark the keyboard); a permission or unrecognised dialog gets nothing and the reply is a hint to use the buttons or `/keys`; see [Questions and buttons](behaviour.md#questions-and-buttons) |
 | `/keys esc enter` | raw key names |
 | `/screen` | for idle or done OpenCode, Codex, Antigravity (`agy`), Pi and Muse, the current session's last reply rendered with bold, lists, links, and code blocks, up to five messages (for Codex, Antigravity, Pi and Muse the final answer of the last turn, not cut at the screen height); if unavailable, the visible screen. Claude Code and other agents always show the visible screen. Working and blocked agents show their progress or dialog from the screen |
 | `/screen 40` | the visible screen's last 40 lines (max 200), never the reply; the input frame is cut afterwards, so an idle Claude Code pane may answer with fewer than 40 lines |

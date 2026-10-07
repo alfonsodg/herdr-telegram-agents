@@ -94,6 +94,9 @@ const (
 	// presenceHereManual answers /here where the machine has no idle
 	// source: quiet turned on by hand.
 	presenceHereManual = "🖥 quiet on until /away (no input idle source on this machine)"
+	// blockedHint answers a message that was not sent because the agent
+	// waits at a dialog whose dialog has no free-text entry to use.
+	blockedHint = "⚠️ the agent is waiting at a dialog: use the buttons, or /keys; the message was not sent"
 	// presenceHereFmt answers /here with the automatic verdict.
 	presenceHereFmt     = "🖥 presence is automatic again: %s"
 	presenceVerdictDesk = "at the desk, quiet on"
@@ -232,11 +235,9 @@ func (i *inbound) Pending() int { return len(i.pending) }
 func (i *inbound) typed(ctx context.Context, msg domain.TopicMessage, key domain.Key, w typingWait) error {
 	i.log.Info("typed text delivered", slog.String("key", key.String()), slog.Int("thread_id", msg.ThreadID),
 		slog.Int("message_id", msg.MessageID), slog.Int("dialog_message_id", w.messageID), slog.Int("len", len(msg.Text)))
-	status := domain.StatusBlocked
-	if a, ok := i.agents(key); ok {
-		status = a.Status
-	}
-	if err := i.submitText(ctx, key.PaneID, status, msg.Text); err != nil {
+	// The ✏️ flow already chose the text entry: its box is open, so the
+	// text goes straight in with an Enter.
+	if err := i.herdr.SendText(ctx, key.PaneID, msg.Text); err != nil {
 		return i.failed(ctx, msg, key, "prompt", err)
 	}
 	if err := i.out.TypingDone(ctx, key, w, msg.Text); err != nil {
@@ -282,8 +283,12 @@ func (i *inbound) HandleTopic(ctx context.Context, msg domain.TopicMessage) erro
 				slog.Int("thread_id", msg.ThreadID), slog.Int("message_id", msg.MessageID), slog.Int("len", len(msg.Text)))
 			return i.reply(ctx, msg.ThreadID, msg.MessageID, fmt.Sprintf(pickerRefusedFmt, "/"+word))
 		}
-		if err := i.submitText(ctx, key.PaneID, agent.Status, cmd.Text); err != nil {
+		delivered, err := i.submitText(ctx, key, agent.Status, cmd.Text)
+		if err != nil {
 			return i.failed(ctx, msg, key, "prompt", err)
+		}
+		if !delivered {
+			return i.reply(ctx, msg.ThreadID, msg.MessageID, blockedHint)
 		}
 		i.log.Debug("herdr call ok", slog.String("method", "prompt"), slog.String("key", key.String()), slog.Int("message_id", msg.MessageID))
 		return i.out.PromptSent(ctx, key, msg.ThreadID, msg.MessageID)
@@ -337,21 +342,22 @@ func (i *inbound) HandleTopic(ctx context.Context, msg domain.TopicMessage) erro
 	}
 }
 
-// submitText delivers text to an agent. While the agent waits at a dialog
-// Herdr refuses agent.prompt (agent_blocked) before sending any input, so
-// the text is typed into the pane through pane.send_text and submitted
-// with an Enter: the operator's message is that dialog's answer.
-func (i *inbound) submitText(ctx context.Context, paneID string, status domain.Status, text string) error {
+// submitText delivers text to an agent. A blocked agent is never typed
+// into blind: AnswerBlocked repeats the ✏️ flow automatically only when
+// the dialog has a free-text entry and it is still on screen, and sends
+// nothing otherwise (the caller posts a hint). The same rule applies when
+// agent.prompt answers agent_blocked because of the status race.
+func (i *inbound) submitText(ctx context.Context, key domain.Key, status domain.Status, text string) (bool, error) {
 	if status == domain.StatusBlocked {
-		return i.herdr.SendText(ctx, paneID, text)
+		return i.out.AnswerBlocked(ctx, key, text)
 	}
-	err := i.herdr.Prompt(ctx, paneID, text)
-	if errors.Is(err, domain.ErrAgentBlocked) {
-		// The status flipped to blocked between routing and delivery (or
-		// Herdr saw a dialog the daemon had not): the text is its answer.
-		return i.herdr.SendText(ctx, paneID, text)
+	if err := i.herdr.Prompt(ctx, key.PaneID, text); err != nil {
+		if errors.Is(err, domain.ErrAgentBlocked) {
+			return i.out.AnswerBlocked(ctx, key, text)
+		}
+		return false, err
 	}
-	return err
+	return true, nil
 }
 
 // control sends one control key (esc or ctrl+c) to a live agent in any
@@ -1212,8 +1218,12 @@ func (i *inbound) InboxFinished(ctx context.Context, r inboxResult) error {
 	if a, ok := i.agents(r.key); ok {
 		status = a.Status
 	}
-	if err := i.submitText(ctx, r.key.PaneID, status, domain.AttachmentPrompt(r.caption, r.paths)); err != nil {
+	delivered, err := i.submitText(ctx, r.key, status, domain.AttachmentPrompt(r.caption, r.paths))
+	if err != nil {
 		return i.failed(ctx, msg, r.key, "prompt", err)
+	}
+	if !delivered {
+		return i.reply(ctx, r.threadID, r.messageID, blockedHint)
 	}
 	i.log.Info("inbox delivered", slog.String("key", r.key.String()), slog.Int("message_id", r.messageID), slog.Int("saved", len(r.paths)),
 		slog.Int("failed", len(r.failed)), slog.Int64("elapsed_ms", elapsed))

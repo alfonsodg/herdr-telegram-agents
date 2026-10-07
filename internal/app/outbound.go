@@ -101,10 +101,17 @@ type outbound struct {
 	// source to finish the turn (domain.ErrReplyPending); the debouncer
 	// carries the retry timer.
 	pendingReplies map[domain.Key]pendingReply
-	// unreadable counts consecutive done posts whose reply could not be
-	// read for an agent the daemon has a reader for; the notice fires once
-	// per streak and a readable reply clears the count.
-	unreadable map[domain.Key]int
+	// unreadable tracks one agent's unreadable-reply streak: the count of
+	// delivered fallback posts whose reply could not be read, and whether
+	// the notice for this streak already went out. A readable reply clears
+	// the state.
+	unreadable map[domain.Key]unreadableState
+}
+
+// unreadableState is one agent's streak, see outbound.unreadable.
+type unreadableState struct {
+	count    int
+	notified bool
 }
 
 // pendingReply is a done post fired again after replyPendingDelay. It keeps
@@ -670,6 +677,7 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompleti
 	// unavailable. A failure costs the screen mode nothing but the line.
 	wantMeta := status == domain.StatusDone && o.meta() && o.replies != nil
 	var footer string
+	unreadableFallback := false
 	if !captured && (mode != domain.DoneScreen || wantMeta) {
 		r, err := o.replies.LastReply(ctx, agent)
 		if err == nil && !freshReply(hasTurn, t.started, r) {
@@ -703,9 +711,7 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompleti
 			mode = domain.DoneScreen
 		case err != nil && mode != domain.DoneScreen:
 			o.log.Info("reply source unavailable", slog.String("key", key.String()), slog.String("mode", string(mode)), slog.Any("err", logErr))
-			if !errors.Is(err, domain.ErrUnsupportedAgent) && !errors.Is(err, domain.ErrStaleTranscript) {
-				o.noteUnreadable(ctx, key, entry.ThreadID)
-			}
+			unreadableFallback = !errors.Is(err, domain.ErrUnsupportedAgent) && !errors.Is(err, domain.ErrStaleTranscript)
 			mode = domain.DoneScreen
 		case err != nil:
 			o.log.Debug("turn meta unavailable", slog.String("key", key.String()), slog.Any("err", logErr))
@@ -764,6 +770,10 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompleti
 		return o.sendFailed(key, err)
 	}
 	o.lastPosted[key] = hash
+	if unreadableFallback {
+		// The fallback post is on its way: this read failure counts.
+		o.noteUnreadable(ctx, key, entry.ThreadID)
+	}
 	if len(out.Buttons) > 0 {
 		o.keyboards[key] = keyboard{messageID: id, choices: dialog.Choices, multi: dialog.Multi, textEntry: dialog.TextEntry, textLabel: dialog.TextLabel,
 			cursor: dialog.Cursor, submitRow: dialog.SubmitRow}
@@ -1489,30 +1499,40 @@ func freshReply(hasTurn bool, turnStarted time.Time, r domain.Reply) bool {
 	return !r.Written.Before(turnStarted.Add(-turnStartSlack))
 }
 
-// noteUnreadable counts consecutive done posts whose reply could not be
-// read for an agent the daemon has a reader for. After
+// noteUnreadable counts one delivered fallback post whose reply could not
+// be read for an agent the daemon has a reader for. After
 // unreadableNoticeAfter in a row it posts one notice in the topic: a
 // reader that quietly stopped working (a store grown past a limit, a
-// changed format) must not degrade to screens unnoticed. A readable reply
-// clears the count. Expected fallbacks (unsupported kinds, stale
-// transcripts) never get here. The notice is diagnostic: no sound, and
-// held like every other non-question post while quiet mode is at the desk.
+// changed format) must not degrade to screens unnoticed. The notice fires
+// once per streak, is retried when held or when its send failed, and a
+// readable reply clears the state. Expected fallbacks (unsupported kinds,
+// stale transcripts) never get here. The notice is diagnostic: no sound,
+// and held like every other non-question post while quiet mode is at the
+// desk.
 func (o *outbound) noteUnreadable(ctx context.Context, key domain.Key, threadID int) {
 	if o.unreadable == nil {
-		o.unreadable = map[domain.Key]int{}
+		o.unreadable = map[domain.Key]unreadableState{}
 	}
-	o.unreadable[key]++
-	if o.unreadable[key] < unreadableNoticeAfter {
+	st := o.unreadable[key]
+	if st.notified {
 		return
 	}
-	o.unreadable[key] = 0
+	st.count++
+	if st.count < unreadableNoticeAfter {
+		o.unreadable[key] = st
+		return
+	}
 	if o.quiet() && o.posts() == domain.PostsHeld {
+		o.unreadable[key] = st // retried when quiet ends
 		return
 	}
 	if _, err := o.tg.Send(ctx, domain.Outgoing{ThreadID: threadID, Text: unreadableNotice, Notify: false}); err != nil {
 		o.log.Warn("unreadable notice failed", slog.String("key", key.String()), slog.String("err", err.Error()))
+		o.unreadable[key] = st // retried with the next delivered post
 		return
 	}
+	st.notified = true
+	o.unreadable[key] = st
 	o.log.Warn("unreadable replies notice posted", slog.String("key", key.String()), slog.Int("thread_id", threadID))
 }
 

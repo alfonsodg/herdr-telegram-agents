@@ -29,7 +29,10 @@ func TestOutboundUnreadableNotice(t *testing.T) {
 	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
 	fail := fmt.Errorf("%w: export failed", domain.ErrNoReply)
 	f.replies.Fail(a.Key, fail)
+	turns := 0
 	turn := func() {
+		turns++
+		f.herdr.SetScreen("p1", fmt.Sprintf("raw screen %d", turns))
 		f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusWorking)})
 		f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusDone)})
 		f.fire(t, 1)
@@ -55,6 +58,19 @@ func TestOutboundUnreadableNotice(t *testing.T) {
 	if got := notices(f); got != 1 {
 		t.Fatalf("notices after a readable reply = %d, want 1", got)
 	}
+	// The streak continues: one more delivered failure reaches the
+	// threshold again (a new streak after the readable reply) and never
+	// repeats while the streak runs on.
+	turn()
+	if got := notices(f); got != 2 {
+		t.Fatalf("second streak notice = %d, want 2", got)
+	}
+	for i := 0; i < unreadableNoticeAfter+2; i++ {
+		turn()
+	}
+	if got := notices(f); got != 2 {
+		t.Fatalf("notices in one long streak = %d, want 2", got)
+	}
 
 	// An unsupported kind never counts towards the notice.
 	g := newBridgeFixture(t)
@@ -68,6 +84,24 @@ func TestOutboundUnreadableNotice(t *testing.T) {
 	}
 	if got := notices(g); got != 0 {
 		t.Fatal("unsupported kind got the unreadable notice")
+	}
+}
+
+// TestOutboundUnreadableNoticeIgnoresUndeliveredPosts: only fallback posts
+// that actually go out count; duplicate screens are skipped and never
+// advance the streak.
+func TestOutboundUnreadableNoticeIgnoresUndeliveredPosts(t *testing.T) {
+	f := newBridgeFixture(t)
+	f.herdr.SetScreen("p1", "raw screen text")
+	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	f.replies.Fail(a.Key, fmt.Errorf("%w: export failed", domain.ErrNoReply))
+	for i := 0; i < unreadableNoticeAfter+2; i++ {
+		f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusWorking)})
+		f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusDone)})
+		f.fire(t, 1)
+	}
+	if got := notices(f); got != 0 {
+		t.Fatalf("notice from undelivered duplicate posts: %d", got)
 	}
 }
 

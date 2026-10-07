@@ -388,35 +388,43 @@ func TestOutboundScreenOtherKindsKeepTheScreen(t *testing.T) {
 	}
 }
 
-// TestOutboundScreenCodexUsesReply covers a bare /screen on Codex: an idle
-// or done agent posts its final answer whole (it can be taller than the
-// screen), a working or blocked one still gets the screen, and /screen N
-// stays a literal screen read.
+// TestOutboundScreenCodexUsesReply covers a bare /screen on Codex and
+// Antigravity (agy): an idle or done agent posts its final answer whole (it
+// can be taller than the screen), a working or blocked one still gets the
+// screen, and /screen N stays a literal screen read.
 func TestOutboundScreenCodexUsesReply(t *testing.T) {
 	answer := "Plan:\n1. Do the **first** thing.\n2. Then the second."
-	for _, st := range []domain.Status{domain.StatusIdle, domain.StatusDone, domain.StatusWorking, domain.StatusBlocked} {
-		for _, lines := range []int{0, 10} {
-			f := newBridgeFixture(t)
-			a := f.add(t, "p1", "t1", "a", st)
-			a.Kind = "codex"
-			f.agents[a.Key] = a
-			f.herdr.SetScreen("p1", "codex screen tail")
-			f.replies.Set(a.Key, answer)
-			if err := f.out.Screen(f.ctx, a.Key, lines); err != nil {
-				t.Fatal(err)
-			}
-			sent := f.tg.Sent()
-			wantReply := lines == 0 && st.ReadyForInput()
-			if wantReply {
-				if len(sent) != 1 || sent[0].Text != answer || !sent[0].Markdown || sent[0].Code || sent[0].MaxParts != replyMaxParts || len(f.herdr.Reads()) != 0 {
-					t.Fatalf("%s /screen %d: sent %+v, reads %v; want the answer, rendered and bounded", st, lines, sent, f.herdr.Reads())
-				}
-				continue
-			}
-			if len(sent) != 1 || sent[0].Text != "codex screen tail" || !sent[0].Code || len(f.replies.Calls()) != 0 {
-				t.Fatalf("%s /screen %d: sent %+v, calls %v; want the screen and no reply lookup", st, lines, sent, f.replies.Calls())
+	for _, kind := range []string{"codex", "agy"} {
+		for _, st := range []domain.Status{domain.StatusIdle, domain.StatusDone, domain.StatusWorking, domain.StatusBlocked} {
+			for _, lines := range []int{0, 10} {
+				screenReplyCase(t, kind, st, lines, answer)
 			}
 		}
+	}
+}
+
+// screenReplyCase runs one bare or counted /screen on an agent of kind in
+// status st whose reply source has answer.
+func screenReplyCase(t *testing.T, kind string, st domain.Status, lines int, answer string) {
+	t.Helper()
+	f := newBridgeFixture(t)
+	a := f.add(t, "p1", "t1", "a", st)
+	a.Kind = kind
+	f.agents[a.Key] = a
+	f.herdr.SetScreen("p1", "screen tail")
+	f.replies.Set(a.Key, answer)
+	if err := f.out.Screen(f.ctx, a.Key, lines); err != nil {
+		t.Fatal(err)
+	}
+	sent := f.tg.Sent()
+	if lines == 0 && st.ReadyForInput() {
+		if len(sent) != 1 || sent[0].Text != answer || !sent[0].Markdown || sent[0].Code || sent[0].MaxParts != replyMaxParts || len(f.herdr.Reads()) != 0 {
+			t.Fatalf("%s %s /screen %d: sent %+v, reads %v; want the answer, rendered and bounded", kind, st, lines, sent, f.herdr.Reads())
+		}
+		return
+	}
+	if len(sent) != 1 || sent[0].Text != "screen tail" || !sent[0].Code || len(f.replies.Calls()) != 0 {
+		t.Fatalf("%s %s /screen %d: sent %+v, calls %v; want the screen and no reply lookup", kind, st, lines, sent, f.replies.Calls())
 	}
 }
 

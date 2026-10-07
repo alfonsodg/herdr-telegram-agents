@@ -90,6 +90,9 @@ splits a long list across messages:
 ⚡ V3Jobs · claude · 12 min
 ❓ herdr_tg · claude · 3 min
 
+🔑 Claude 5h 18% ↻2 h · 7d 83% ↻1 d 4 h
+🔑 Codex 7d 3% ↻4 d 2 h
+
 updated 21:35
 ```
 
@@ -116,6 +119,54 @@ updated 21:35
   one stale pinned message behind; unpin and delete it by hand.
 - `Dashboard in General` in `/options` → Sync (default on) switches it;
   off unpins and deletes the message.
+- Under the agents come the quota lines, one per provider with data: each
+  usage window with the share spent and the time until it starts over. See
+  [Quota lines](#quota-lines).
+
+### Quota lines
+
+The dashboard and `/status` end with the usage windows of Claude and Codex
+when the daemon has numbers for them. `Quota in the dashboard` in
+`/options` → Sync (default on) switches them; the lines change only
+messages that are edited in place, so they never ring.
+
+- **Codex** needs no setup. Every `token_count` event in a Codex rollout
+  (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`) carries the account's
+  rate limits; the daemon reads the newest one among the eight most
+  recently written rollouts of the last week. Rate limits belong to the
+  account, so any session will do. Windows are named by length: `5h`,
+  `7d`. An API-key login has no rate limits and shows no line.
+- **Claude** comes from Claude Code's status line. Claude Code hands its
+  status line command a JSON object with `rate_limits.five_hour` and
+  `rate_limits.seven_day` (subscription logins, after the first answer of a
+  session); the plugin's `usage-tap` subcommand stores those two windows
+  and passes its input on unchanged, so it goes in front of your own status
+  line command in `~/.claude/settings.json`:
+
+  ```json
+  "statusLine": {
+    "type": "command",
+    "command": "<plugin dir>/bin/herdr-tg usage-tap --out <state dir>/claude-usage.json | ~/.claude/statusline.sh"
+  }
+  ```
+
+  The doctor action prints this line with both paths filled in (`claude
+  quota: not set up (optional) …`). Without a status line of your own,
+  use the tap alone; it prints its input, so Claude Code shows the raw
+  JSON. The plugin never edits `settings.json`. The tap stores only the two
+  windows and the time it saw them, never the working directory, session,
+  model or cost from the same input; a write failure prints one
+  `usage-tap: …` line on stderr and the status line keeps working. On
+  Windows the command runs through the shell Claude Code uses there; this
+  has not been checked yet.
+- The sources are read at most once a minute. A window whose reset time has
+  passed is dropped, since its share no longer holds; a provider with no
+  window left shows no line. The time left is coarse so the dashboard is
+  not edited every minute for it: `N min` under an hour, `N h` under a day,
+  `N d M h` beyond. Numbers older than 30 minutes end with `· as of HH:MM`.
+- A source that fails keeps its last numbers; the log has one `quota source
+  failed` warning per distinct error and `quota source ready` the first
+  time a provider has data.
 
 ## Capturing working screens
 
@@ -234,17 +285,27 @@ option of the Posts group:
   subagent traffic. The text is posted as a code block, so Markdown shows as
   the agent typed it. For OpenCode, which keeps its sessions in a database
   rather than a file per session, the daemon asks Herdr for the pane's
-  `agent_session` at read time. On OpenCode 2.x the daemon reads the rows
-  since the last user message from opencode's own database
+  `agent_session` at read time. On OpenCode 2.x it reads the rows since the
+  last user message from opencode's own database
   (`~/.local/share/opencode/opencode.db`, through the `sqlite3` binary on its
-  `PATH`, read-only, one indexed query bounded at 5 s): the reply is
+  `PATH`, read-only, one indexed query bounded at 5 s); when the database or
+  `sqlite3` is unavailable it falls back to `opencode session export <session id>`
+  on OpenCode 2.x, or `opencode export <session id>` on 1.x (the
+  `opencode` binary on `PATH`, one shared 10 s timeout, 16 MiB export cap per
+  attempt). OpenCode cuts its output at 64 KiB when it goes into a pipe, so
+  each export goes into a private file (0600) under the plugin's state
+  directory, `tmp/opencode-export-*.json`, which is read back and removed
+  at once; files a crashed daemon left there are removed at the next start.
+  The reply is
   every text part the agent wrote after your last prompt, joined in order,
-  skipping reasoning, tool calls and patches. When the database or `sqlite3`
-  is unavailable, it falls back to `opencode session export <session id>`
-  (`opencode export <session id>` on 1.x) with the `opencode` binary on
-  `PATH`, one shared 10 s timeout and a 16 MiB stdout cap per attempt, read
-  through a private temporary file because the CLI silently truncates piped
-  stdout at 64 KiB multiples while still exiting zero. The session value is used for
+  skipping reasoning, tool calls and patches. OpenCode reports done at
+  every step of a turn, so a read whose newest record is a tool call is a
+  turn still running: in `Reply` and `Formatted` mode the done post waits
+  and reads again up to 3 times, 5 s apart, and posts the screen if the
+  turn still has not finished (log `reply still pending, screen posted`).
+  The real end of the turn usually arrives first as a new done event. A new
+  turn or a question in the meantime drops the wait. `Screen` mode posts at
+  once; an unfinished turn only leaves out the summary line. The session value is used for
   that one lookup and never stored or logged. The pane must have a complete
   session identity matching the topic; after a session change, the screen is
   posted until Herdr reconciles the new identity. Export stderr is discarded;
@@ -286,23 +347,69 @@ option of the Posts group:
   use short reasons without either. Install Herdr's Codex integration with
   `herdr integration install codex` so Herdr reports `agent_session`. Codex is
   read from the daemon's own home directory (`~/.codex`; `CODEX_HOME` is not
-  honoured), so a Codex running inside WSL is not found. When Herdr's reported
-  session went stale (the Codex conversation switched inside the pane), the
-  newest rollout of the pane's working directory is used instead if it carries
-  a fresher answer.
-  For Muse Code the daemon reads the newest assistant message from the pane
-  session's durable log, found through the runtime session whose workspace
-  label matches the working directory's basename
-  (`~/.local/share/muse/sessions/…/session.jsonl`, tail-scanned within the
-  same 4 MiB budget).
-  For Antigravity (`agy`) it reads the model's last answer from the pane
-  conversation's transcript
-  (`~/.gemini/antigravity-cli/brain/<conversation>/…/transcript.jsonl`,
-  `transcript_full.jsonl` as fallback); Herdr reports the conversation id.
-  For OpenCode and Antigravity, a read whose newest record is tool work
-  means the turn is not over: the done post posts nothing and is retried
-  after three seconds, so neither a fragment nor a screen tail appears and
-  the settled answer is not lost when no further status change follows.
+  honoured), so a Codex running inside WSL is not found.
+  For Antigravity (`agy`), Herdr reports the conversation id as the pane's
+  `agent_session`, and the daemon opens that conversation's transcript,
+  `~/.gemini/antigravity-cli/brain/<conversation id>/.system_generated/logs/transcript.jsonl`,
+  or `transcript_full.jsonl` beside it when the first is missing or holds
+  nothing the reader knows. The id must be a UUID, the lookup never leaves
+  the `brain` directory, and a link in place of the transcript is refused.
+  It reads the file from the end within the same 4 MiB budget and posts the
+  newest model answer (`PLANNER_RESPONSE` with text and no tool calls); the
+  commentary Antigravity writes next to a tool call is never posted. When the
+  newest record is tool output, a tool call, a new prompt or a half-written
+  line, the turn is still running and the done post waits and reads again,
+  as for OpenCode. A pane whose conversation no longer matches the topic
+  gets the screen. The conversation id and the path are used for that one
+  lookup and never stored or logged. The transcript is read from the
+  daemon's own home directory; a moved `~/.gemini` is not followed.
+  For Pi (`pi`), Herdr's Pi integration reports the pane's session file
+  itself as `agent_session` (`kind` `path`), and the daemon opens exactly
+  that file; it never picks a file by working directory, where two Pi panes
+  would collide. The path must be absolute, clean and end in `.jsonl`, a
+  link in place of the file is refused, and the file's first line must be a
+  Pi session header, so a path to any other file yields nothing. Because the
+  path comes from Pi, `PI_CODING_AGENT_DIR`, `--session-dir` and
+  `--session <path>` work as they are. A Pi session is a tree: the daemon
+  follows the active branch from the last line back through each entry's
+  parent, so after `/tree` it never posts an answer from the abandoned
+  branch. Within the same 4 MiB budget it posts the newest assistant
+  message that ended the turn (no tool call, stop reason `stop` or
+  `length`); thinking and the commentary Pi writes next to a tool call are
+  never posted. When the newest message is a tool call, a tool result, a new
+  prompt or a half-written line, the turn is still running and the done post
+  waits and reads again, as for OpenCode; a turn that ended in an error or
+  was aborted gets the screen, which shows Pi's message. `/new`, `/resume`
+  and `/fork` in Pi report the new file, and a pane whose session no longer
+  matches the topic gets the screen. Without the integration
+  (`herdr integration install pi`), with `--no-session`, outside the TUI, or
+  before the first message (Pi creates the file then) the screen is posted.
+  The path is used for that one lookup and never stored or logged.
+  For Muse Code (`muse`), Herdr reports no session, so the daemon ties the
+  pane to its Muse session through the pane's processes (`pane.process_info`,
+  Herdr protocol 22 or newer). Muse keeps one runtime file per live session
+  under `runtime/muse/sessions/` in its data directory, naming the owning
+  process (`process_generation_hint`, `pid=…`) and the working directory's
+  name; a session counts only when its pid is one of the pane's processes and
+  its directory name matches the pane's. A pane is never matched by the
+  directory name alone, so two Muse panes in `~/a/api` and `~/b/api`, or in
+  one directory, each get their own answer. After `/new` or `/clear` one
+  process owns several sessions, and the one whose log was written last
+  wins. The data directory is the first of `~/.local/share/muse`, `~/.muse`
+  and `~/Library/Application Support/muse` that has the runtime directory
+  (only the first is confirmed, on Linux); `XDG_DATA_HOME` is not honoured.
+  The log is `sessions/<year>/<month>/<day>/<session id>/session.jsonl`,
+  dated by the session's creation, found by walking the dated directories
+  newest first and remembered per session. Within the same 4 MiB budget the
+  daemon posts the final message of the newest run that ended `completed`:
+  the newest `assistant_message_committed` of that run whose `phase` is not
+  `commentary`; commentary is never posted. A run that has not ended (or a
+  half-written line) is still running and the done post waits and reads
+  again, as for OpenCode; a run that ended `failed` or `cancelled` (Esc)
+  gets the screen, and so does a run Muse never closed because the process
+  was killed. Windows, `--no-session-log` sessions and sessions whose
+  runtime file is missing get the screen. Session ids, pids and paths are
+  used for the lookup and never logged.
 - **Formatted** (default): the same reply rendered for Telegram: headings become bold,
   `- ` lists become `•`, quotes get a bar, `[text](url)` becomes a link,
   inline code and fenced blocks keep their monospace, pipe tables are
@@ -310,9 +417,9 @@ option of the Posts group:
   are split and stop after five messages with `… (+N chars)` at the end.
   Should Telegram reject the markup (`can't parse entities`), that part is
   sent once more as a plain code block and the log says so. An agent with
-  no readable reply (any kind other than Claude Code, Codex, OpenCode, Muse
-  and Antigravity, or a missing or stale transcript) gets the screen post
-  instead.
+  no readable reply (any kind other than Claude Code, Codex, OpenCode,
+  Antigravity, Pi and Muse,
+  or a missing or stale transcript) gets the screen post instead.
 
 `Formatted` has been the default since 2026-10-01; before that it was
 `Screen`. `options.json` stores every option once the panel has saved it,
@@ -330,10 +437,15 @@ excluded) and how many output tokens it wrote (summed once per API
 response). A part the transcript does not know is left out; nothing known
 means no line. There is no cost: Claude Code writes the cost once at the
 end of the session, not per turn, and a price table would drift from what
-the status line shows. Claude Code, OpenCode and Codex only (for OpenCode the
+the status line shows. Claude Code, OpenCode, Codex, Antigravity, Pi and Muse only (for OpenCode the
   edited files are distinct paths from completed `edit` and `write` tools; for
 Codex the line has the duration, the model and the output tokens, but no files,
-as its rollout does not name them reliably): a pane of another kind, a
+as its rollout does not name them reliably; for Antigravity the line has the
+duration only, as its transcript names neither the model nor the files, and
+so has Muse; for
+Pi the line has the duration, the model, the distinct paths of the turn's
+`edit` and `write` tool calls and the output tokens summed over the turn's
+assistant messages): a pane of another kind, a
   pane without a working directory or one without a transcript directory
 posts as before and the log says why at debug (`turn meta unavailable`). In `Screen` mode
 the transcript is read for the line alone. A transcript last written
@@ -356,13 +468,13 @@ never folds. `Screen` posts are never folded, whatever the option says.
 Limits worth knowing: two Claude Code panes in the same directory cannot be
 told apart, so the reply of the one that wrote last wins (the stale check
 above catches the case where the other pane wrote before this turn began);
-other agents (Pi, Gemini) always get the screen; when no transcript or no
+other agents (Gemini, OMP) always get the screen; when no transcript or no
 text is found the daemon posts the screen and logs `reply source
 unavailable` with a safe category. For an agent kind the daemon can read,
 four unreadable replies in a row post one ⚠️ notice in the topic (the next
 readable reply clears the streak), so a reader that stopped working never
 degrades to screens unnoticed. Blocked posts are never affected: the dialog
-with its buttons exists only on the screen. For an idle or done OpenCode or Codex agent,
+with its buttons exists only on the screen. For an idle or done OpenCode, Codex, Antigravity, Pi or Muse agent,
 a bare `/screen` tries the current session reply, rendered like `Formatted`,
 whatever `Done post` says. It falls back to the screen when the reply is
 unavailable, empty, or stale. The reply stops after five Telegram messages
@@ -434,12 +546,13 @@ The options today:
 |--------|-------|--------------|
 | `Herdr → Telegram sync` | Sync | Default on. Off: the daemon creates, edits and closes no topic and posts no screen until it is on again. Messages, keys, `/screen`, `/status` and presses on existing question buttons keep working, the screen capture keeps running, daemon notices keep posting. Back on: a full resync, like the `resync` action. A daemon that starts with sync off says so in its started notice, in the `/status` header (`🔇 …`), in the `status` action line (`sync=off`) and in the log. |
 | `Dashboard in General` | Sync | Default on. One pinned message in General, edited in place and never ringing: every live agent (up to 40, then `… +N more`) with its status, how long it has been in it and a link to its topic, `updated HH:MM` at the bottom. Off unpins and deletes it. See [The dashboard](#the-dashboard). |
-| `Quiet while at the desk` | Quiet | Default off: every topic edit and screen post goes out at once, sounds included, so a fresh install shows the plugin at work. On: while you are at the desk, topic edits wait and screen posts are silent; everything catches up when you leave. Automatic on macOS and Windows; on Linux it asks Mutter, the freedesktop ScreenSaver or `xprintidle`, and where none answers quiet starts at the desk (silent): `/away` releases it, `/here` brings it back. Off means no presence check at all; `/away` and `/here` then answer that quiet mode is off. See [Quiet while at the desk](#quiet-while-at-the-desk). |
+| `Quota in the dashboard` | Sync | Default on. The Claude and Codex usage windows under the dashboard and `/status` (`🔑 Codex 7d 3% ↻4 d 2 h`). Codex is read from its session files; Claude needs the status line tap the doctor action shows. No data, no line. Off drops the lines at the next refresh. See [Quota lines](#quota-lines). |
+| `Quiet while at the desk` | Quiet | Default off: every topic edit and screen post goes out at once, sounds included, so a fresh install shows the plugin at work. On: while you are at the desk, topic edits wait and screen posts are silent; everything catches up when you leave. On Linux it needs GNOME, or an X11 session with `xprintidle`; where none of them answers quiet starts at the desk (silent) and `/away` releases it, `/here` brings it back; see the Presence bullet. Off means no presence check at all; `/away` and `/here` then answer that quiet mode is off. See [Quiet while at the desk](#quiet-while-at-the-desk). |
 | `Away after` | Quiet | Default 3 min. Minutes without keyboard or mouse input on this machine before you count as away. A value outside the picker's list (say `45`) can be typed into `options.json` by hand. |
 | `Hold topic edits` | Quiet | Default on. While at the desk no topic is created, renamed, closed, reopened or given a new icon; each of those is a Telegram service message that rings the phone. Off keeps topic edits live while at the desk. |
 | `Screen posts` | Quiet | Default `Silent`. What happens to blocked and done screens while at the desk: `Silent` posts without a sound (Telegram still shows a silent banner), `Held` posts nothing until you leave, `Normal` posts as usual. |
 | `Re-announce on leaving` | Quiet | Default on. When you leave, the screen of every agent still waiting for an answer is posted again with a sound, once per question. Off: only agents that have no post at all yet are posted. |
-| `Done post` | Posts | Default `Formatted`. What a topic receives when its agent finishes: `Screen` posts the last 12 terminal lines in monospace; `Reply` posts the agent's last message from its Claude Code transcript (`~/.claude/projects/<cwd slug>/`, newest session file) in monospace; `Formatted` renders that message: headings and bold, `•` lists, links, inline and fenced code, tables in monospace. A reply longer than five messages is cut with `… (+N chars)`. For OpenCode the message comes from the CLI export for the pane's session; for Codex it is the final answer of the last completed turn, read from the pane's rollout file; for Muse Code and Antigravity, the newest answer in their session logs. Falls back to `Screen` for other agents or when no reply is found, see [Done posts](#done-posts). |
+| `Done post` | Posts | Default `Formatted`. What a topic receives when its agent finishes: `Screen` posts the last 12 terminal lines in monospace; `Reply` posts the agent's last message from its Claude Code transcript (`~/.claude/projects/<cwd slug>/`, newest session file) in monospace; `Formatted` renders that message: headings and bold, `•` lists, links, inline and fenced code, tables in monospace. A reply longer than five messages is cut with `… (+N chars)`. For OpenCode the message comes from the last turn's rows in opencode's own database when `sqlite3` is available (the CLI export otherwise); for Codex it is the final answer of the last completed turn, read from the pane's rollout file. Falls back to `Screen` for other agents or when no reply is found, see [Done posts](#done-posts). |
 | `Turn summary line` | Posts | Default on. Every done post (`Screen`, `Reply` and `Formatted`) ends with one line from the agent's transcript: `⏱ 4 min · fable-5-1 · ✏️ 3 files · ↑ 12k tokens` (turn duration, model, distinct files edited, output tokens). Claude Code, OpenCode and Codex only (no file count for Codex); without a transcript the post ends as before and the log has `turn meta unavailable` at debug. A transcript written before the turn began is skipped. Off: no line and, in `Screen` mode, no transcript read. See [Done posts](#done-posts). |
 | `Fold long replies after` | Posts | Default `20 lines`. A `Reply` or `Formatted` done post whose message part has more lines than this arrives collapsed in Telegram's expandable quote: the first lines and an arrow that opens the rest; the summary line stays visible under it. `Off` never folds; `Screen` posts are never folded. Any integer of lines up to 1000 can be typed into `options.json`. See [Done posts](#done-posts). |
 | `Trim the input frame` | Posts | Default on. Every screen post (done and blocked screens, `/screen`, `/screen all`, the tails of the Claude Code commands, the pager's six lines) loses Claude Code's input frame at the bottom: the `─` rule, the empty `❯` row, the second rule, the status line (`… │ main ✓ │ 14%: …`) and the mode hint (`⏵⏵ auto mode on (shift+tab to cycle)` or `? for shortcuts`). The cut walks up from the bottom and stops at the first line that is none of these, so a dialog and its options are never touched, a `❯` row with typed text is left alone and a screen without the frame (Codex, any other agent) passes through unchanged. The duplicate check runs after the cut, so a screen that differs only in the status line's clock is not posted twice. Off posts the screen as captured. |
@@ -458,7 +571,7 @@ The options today:
 
 Values are saved in `options.json` next to `config.json` (mode 0600) as
 `{"version": 1, "values": {"sync.enabled": true, "sync.dashboard": true,
-"quiet.enabled": true, "quiet.idle_minutes": "3", "quiet.posts": "silent",
+"sync.quota": true, "quiet.enabled": true, "quiet.idle_minutes": "3", "quiet.posts": "silent",
 "posts.done": "formatted", "posts.meta": true, "posts.fold": "20",
 "posts.chrome": true, "posts.reactions": false, "posts.pager": true,
 "posts.blocked_delay": "0", "inbox.enabled": true, "inbox.max_mb": "20",
@@ -591,14 +704,24 @@ you can see the plugin working. Tick `Quiet while at the desk` in
 `/options` → Quiet once the service messages ring too often.
 
 - **Presence** is the machine's input idle time, sampled every 10 seconds:
-  `ioreg` (`HIDIdleTime`) on macOS, `GetLastInputInfo` on Windows and, on
-  Linux, GNOME's Mutter idle monitor, the freedesktop ScreenSaver time or
-  `xprintidle`. Idle shorter than `Away after` means at the desk. Where no
-  source answers (headless sessions, KDE Wayland today) the daemon logs one
-  warning, retries once a minute in case one appears, and quiet **starts at
-  the desk** (Telegram silent): `/away` releases it and `/here` brings it
-  back. Herdr's own pane focus is not used:
+  `ioreg` (`HIDIdleTime`) on macOS, `GetLastInputInfo` on Windows. On Linux
+  the daemon asks GNOME Shell first (`gdbus` call to
+  `org.gnome.Mutter.IdleMonitor`, Wayland and X11), then `xprintidle` (X11;
+  install it from your distribution). The source that answered is logged as
+  `input idle source source=mutter|xprintidle`. Idle shorter than
+  `Away after` means at the desk. Herdr's own pane focus is not used:
   another pane's agent would ring while you sit in front of it.
+- **Where there is no source** (a Linux server or SSH session without
+  `DISPLAY` or `WAYLAND_DISPLAY`, KDE Plasma on Wayland where the Mutter
+  call fails and `xprintidle` sees only X windows, or neither `gdbus` nor
+  `xprintidle` installed) quiet **starts at the desk** when the option is
+  on: Telegram stays silent, `/away` releases it, a timed `/away` hands the
+  default back when it expires and `/here` brings it back by hand. The
+  daemon logs one warning at start (`no input idle source`) and retries
+  once a minute, so a source that appears later takes over. When a source
+  exists but a sample fails (a timeout, the session bus not up yet), the
+  previous verdict stays, one warning `presence sample failed` is logged,
+  and `presence source recovered` follows the next good sample.
 - **While at the desk** (quiet on): the reconciler defers every topic write
   (create, icon, name, close, reopen) and logs `reconcile deferred: operator
   at the desk (quiet)` once per period; blocked and done screens follow
@@ -782,6 +905,7 @@ not start: …`.
 | `options.json` | config dir, mode 0600 | the `/options` choices |
 | `inbox/` | state dir, mode 0700, files 0600 | attachments sent to topics, swept daily after `Delete files after` |
 | `daemon.pid` | state dir | pid of the running daemon |
+| `claude-usage.json` | state dir, mode 0600 | Claude's two usage windows and when the status line tap saw them, written by `usage-tap` from Claude Code's status line; see [Quota lines](#quota-lines) |
 | `update.json` | state dir, mode 0600 | current or last update job, phases, source, versions, rollback data and notification state |
 | `update.lock/` | state dir | exclusive worker ownership; a dead owner can be recovered |
 | `update-worker-<job-id>` and `update-worker.err.log` | state dir | detached worker copy and its stderr; `.exe` on Windows |

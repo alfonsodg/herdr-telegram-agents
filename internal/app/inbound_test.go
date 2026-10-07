@@ -121,7 +121,7 @@ func TestInboundStatusHelpUnknown(t *testing.T) {
 	if sent[0].Text != "❓ blocked · ws · reviewer · pane p1" || sent[0].ReplyTo != 3 || sent[0].Notify {
 		t.Errorf("status reply = %+v", sent[0])
 	}
-	if !strings.HasPrefix(sent[1].Text, "Commands\n/screen") || !strings.Contains(sent[1].Text, "/clear, /compact [instructions], /usage, /model [name], /models") || !strings.Contains(sent[1].Text, "buttons") {
+	if !strings.HasPrefix(sent[1].Text, "Commands\n/screen") || !strings.Contains(sent[1].Text, "/clear, /compact [instructions], /usage, /model [name]") || !strings.Contains(sent[1].Text, "buttons") {
 		t.Errorf("help reply = %q", sent[1].Text)
 	}
 	if sent[2].Text != "unknown command, see /help" {
@@ -280,6 +280,18 @@ func (f *bridgeFixture) fireCommand(t *testing.T, want int) {
 	}
 }
 
+// claude marks a fixture agent as Claude Code, the only kind whose
+// overlay commands get the automatic esc.
+func (f *bridgeFixture) claude(a domain.Agent) domain.Agent {
+	return f.withKind(a, domain.ClaudeKind)
+}
+
+func (f *bridgeFixture) withKind(a domain.Agent, kind string) domain.Agent {
+	a.Kind = kind
+	f.agents[a.Key] = a
+	return a
+}
+
 const overlayScreen = "❯ /usage\ntranscript line\n▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔\n   Settings  Status   Usage\n\n   Current session\n   █████ 10% used\n\n"
 
 func TestInboundForwardClearPostsTail(t *testing.T) {
@@ -317,9 +329,7 @@ func TestInboundForwardClearPostsTail(t *testing.T) {
 
 func TestInboundForwardUsageCutsOverlayAndDismisses(t *testing.T) {
 	f := newBridgeFixture(t)
-	a := f.add(t, "p1", "t1", "reviewer", domain.StatusDone)
-	a.Kind = "claude"
-	f.agents[a.Key] = a
+	f.claude(f.add(t, "p1", "t1", "reviewer", domain.StatusDone))
 	f.herdr.SetScreen("p1", overlayScreen)
 
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 22, "/usage")); err != nil {
@@ -337,9 +347,7 @@ func TestInboundForwardUsageCutsOverlayAndDismisses(t *testing.T) {
 
 func TestInboundForwardUsageCutsTheFrame(t *testing.T) {
 	f := newBridgeFixture(t)
-	a := f.add(t, "p1", "t1", "reviewer", domain.StatusDone)
-	a.Kind = "claude"
-	f.agents[a.Key] = a
+	f.add(t, "p1", "t1", "reviewer", domain.StatusDone)
 	f.herdr.SetScreen("p1", overlayScreen+testFrame)
 
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 24, "/usage")); err != nil {
@@ -378,9 +386,7 @@ func TestInboundForwardScreenWithoutRuleIsPostedWhole(t *testing.T) {
 
 func TestInboundForwardModelBareVsName(t *testing.T) {
 	f := newBridgeFixture(t)
-	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
-	a.Kind = "claude"
-	f.agents[a.Key] = a
+	f.claude(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle))
 	f.herdr.SetScreen("p1", overlayScreen)
 
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 24, "/model")); err != nil {
@@ -410,30 +416,6 @@ func TestInboundForwardModelBareVsName(t *testing.T) {
 	}
 	sent := f.tg.Sent()
 	if len(sent) != 2 || sent[1].Text != "❯ /model sonnet\n  ⎿  Set model to sonnet" || sent[1].ReplyTo != 25 {
-		t.Fatalf("Sent = %+v", sent)
-	}
-}
-
-// TestInboundForwardModelOnCodexKeepsPicker: the auto-dismiss is for Claude
-// Code overlays; on codex the /model picker must stay open for /keys.
-func TestInboundForwardModelOnCodexKeepsPicker(t *testing.T) {
-	f := newBridgeFixture(t)
-	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
-	a.Kind = "codex"
-	f.agents[a.Key] = a
-	f.herdr.SetScreen("p1", "Select a model\n> gpt-5.1-codex\n  gpt-5.1")
-
-	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 30, "/model")); err != nil {
-		t.Fatal(err)
-	}
-	f.fireCommand(t, 1)
-	if p := f.herdr.Prompts(); len(p) != 1 || p[0] != "p1: /model" {
-		t.Fatalf("Prompts = %v", p)
-	}
-	if k := f.herdr.Keys(); len(k) != 0 {
-		t.Fatalf("codex picker dismissed: %+v", k)
-	}
-	if sent := f.tg.Sent(); len(sent) != 1 || !strings.Contains(sent[0].Text, "Select a model") {
 		t.Fatalf("Sent = %+v", sent)
 	}
 }
@@ -503,11 +485,249 @@ func TestInboundForwardPromptFailure(t *testing.T) {
 	}
 }
 
+// codexModelScreen is Codex 0.160.1 after /model (recorded live): a
+// numbered picker without the ▔ rule Claude Code draws.
+const codexModelScreen = "› /model\n\n  Select Model and Effort\n› 1. GPT-6.1-Sol (current)  Latest workhorse model\n  2. GPT-6-Luna             Fast and affordable model\n  enter select · esc back\n"
+
+// TestInboundForwardModelOnCodexKeepsPicker: the automatic esc is for
+// Claude Code overlays; a Codex picker stays open for /keys and the post
+// says so.
+func TestInboundForwardModelOnCodexKeepsPicker(t *testing.T) {
+	for _, kind := range []string{"codex", "opencode", ""} {
+		t.Run("kind="+kind, func(t *testing.T) {
+			f := newBridgeFixture(t)
+			f.withKind(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle), kind)
+			f.herdr.SetScreen("p1", codexModelScreen)
+
+			if err := f.in.HandleTopic(f.ctx, topicMsg(101, 30, "/model")); err != nil {
+				t.Fatal(err)
+			}
+			f.fireCommand(t, 1)
+			if p := f.herdr.Prompts(); len(p) != 1 || p[0] != "p1: /model" {
+				t.Fatalf("Prompts = %v", p)
+			}
+			if k := f.herdr.Keys(); len(k) != 0 {
+				t.Fatalf("picker dismissed: %+v", k)
+			}
+			sent := f.tg.Sent()
+			if len(sent) != 1 || sent[0].Text != strings.TrimSpace(codexModelScreen) || sent[0].Footer != pickerHint || sent[0].ReplyTo != 30 {
+				t.Fatalf("Sent = %+v", sent)
+			}
+			if log := f.logBuf.String(); !strings.Contains(log, `"msg":"command picker kept"`) {
+				t.Fatalf("picker kept not logged: %s", log)
+			}
+		})
+	}
+}
+
+// TestInboundForwardModelsOnOpenCodeKeepsPicker: OpenCode's model picker is
+// its own /models; it is forwarded and kept open like the /model pickers.
+func TestInboundForwardModelsOnOpenCodeKeepsPicker(t *testing.T) {
+	f := newBridgeFixture(t)
+	f.withKind(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle), "opencode")
+	f.herdr.SetScreen("p1", codexModelScreen)
+
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 31, "/models")); err != nil {
+		t.Fatal(err)
+	}
+	f.fireCommand(t, 1)
+	if p := f.herdr.Prompts(); len(p) != 1 || p[0] != "p1: /models" {
+		t.Fatalf("Prompts = %v", p)
+	}
+	if k := f.herdr.Keys(); len(k) != 0 {
+		t.Fatalf("picker dismissed: %+v", k)
+	}
+	if sent := f.tg.Sent(); len(sent) != 1 || sent[0].Footer != pickerHint || sent[0].ReplyTo != 31 {
+		t.Fatalf("Sent = %+v", sent)
+	}
+}
+
+// TestInboundForwardModelsOnlyOnOpenCode: /models is OpenCode's own command;
+// on any other kind it is not typed (it would run as a plain prompt) and
+// sets no picker hold.
+func TestInboundForwardModelsOnlyOnOpenCode(t *testing.T) {
+	for _, kind := range []string{"claude", "codex", ""} {
+		t.Run("kind="+kind, func(t *testing.T) {
+			f := newBridgeFixture(t)
+			a := f.withKind(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle), kind)
+			if err := f.in.HandleTopic(f.ctx, topicMsg(101, 32, "/models")); err != nil {
+				t.Fatal(err)
+			}
+			if p := f.herdr.Prompts(); len(p) != 0 {
+				t.Fatalf("/models typed into %q: %v", kind, p)
+			}
+			if sent := f.tg.Sent(); len(sent) != 1 || !strings.Contains(sent[0].Text, "OpenCode") || sent[0].ReplyTo != 32 {
+				t.Fatalf("Sent = %+v", sent)
+			}
+			if _, held := f.in.pickers[a.Key]; held {
+				t.Fatal("picker hold set for a command that was not sent")
+			}
+		})
+	}
+}
+
+// keptPicker leaves a Codex /model picker open on p1 and returns the agent.
+func keptPicker(t *testing.T, f *bridgeFixture) domain.Agent {
+	t.Helper()
+	a := f.withKind(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle), "codex")
+	f.herdr.SetScreen("p1", codexModelScreen)
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 40, "/model")); err != nil {
+		t.Fatal(err)
+	}
+	f.fireCommand(t, 1)
+	f.tg.Reset()
+	return a
+}
+
+// TestInboundPickerHoldsNextPromptOnce: live, Codex took a plain "hello" +
+// Enter as a picker choice. The first plain message after a kept picker is
+// held back with a reply; the resend goes through.
+func TestInboundPickerHoldsNextPromptOnce(t *testing.T) {
+	f := newBridgeFixture(t)
+	keptPicker(t, f)
+
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 41, "1")); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.herdr.Prompts(); len(p) != 1 {
+		t.Fatalf("held message typed: %v", p)
+	}
+	assertCallsEqual(t, f.tg, "send:101:"+fmt.Sprintf(pickerRefusedFmt, "/model")+":reply=41")
+	if log := f.logBuf.String(); !strings.Contains(log, `"msg":"prompt held back for open picker"`) || !strings.Contains(log, `"reason":"refused"`) {
+		t.Fatalf("hold not logged: %s", log)
+	}
+
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 42, "1")); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.herdr.Prompts(); len(p) != 2 || p[1] != "p1: 1" {
+		t.Fatalf("resend not typed: %v", p)
+	}
+}
+
+// TestInboundPickerHoldsAttachment: a file sent while a kept picker may be
+// open is saved but not typed (its Enter would pick an option); the hold is
+// used up, so the resend goes through.
+func TestInboundPickerHoldsAttachment(t *testing.T) {
+	f := newBridgeFixture(t)
+	a := keptPicker(t, f)
+	f.tg.SetFile("p", []byte("x"))
+
+	if err := f.in.HandleAttachment(f.ctx, attachment(101, 43, domain.AttachmentPhoto, "p", "", "look", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.herdr.Prompts(); len(p) != 1 {
+		t.Fatalf("attachment typed into the picker: %v", p)
+	}
+	assertCallsEqual(t, f.tg, "download:p:20971520", "send:101:"+fmt.Sprintf(pickerRefusedFmt, "/model")+":reply=43")
+	if _, held := f.in.pickers[a.Key]; held {
+		t.Fatal("hold kept after the attachment used it")
+	}
+	if err := f.in.HandleAttachment(f.ctx, attachment(101, 44, domain.AttachmentPhoto, "p", "", "look", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.herdr.Prompts(); len(p) != 2 || !strings.HasPrefix(p[1], "p1: look\n\n") {
+		t.Fatalf("resend not typed: %v", p)
+	}
+}
+
+// TestInboundPickerHoldReleases: driving or closing the picker, another
+// forwarded command, a status change and pickerHold each release the hold,
+// so the next plain message is typed without a refusal.
+func TestInboundPickerHoldReleases(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason string
+		act    func(t *testing.T, f *bridgeFixture, a domain.Agent)
+	}{
+		{"keys", "keys", func(t *testing.T, f *bridgeFixture, _ domain.Agent) { handle(t, f, "/keys down") }},
+		{"stop", "stop", func(t *testing.T, f *bridgeFixture, _ domain.Agent) { handle(t, f, "/stop") }},
+		{"interrupt", "interrupt", func(t *testing.T, f *bridgeFixture, _ domain.Agent) { handle(t, f, "/interrupt") }},
+		{"forward", "forward", func(t *testing.T, f *bridgeFixture, _ domain.Agent) { handle(t, f, "/compact") }},
+		{"status", "stale_status", func(_ *testing.T, f *bridgeFixture, a domain.Agent) { f.setStatus(a, domain.StatusWorking) }},
+		{"expired", "expired", func(_ *testing.T, f *bridgeFixture, _ domain.Agent) { f.clock.Advance(pickerHold) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newBridgeFixture(t)
+			a := keptPicker(t, f)
+			tt.act(t, f, a)
+			before := len(f.herdr.Prompts())
+			f.tg.Reset()
+			handle(t, f, "hello")
+			if p := f.herdr.Prompts(); len(p) != before+1 || p[len(p)-1] != "p1: hello" {
+				t.Fatalf("Prompts = %v", p)
+			}
+			for _, c := range f.tg.Calls() {
+				if strings.Contains(c, "picker may still be open") {
+					t.Fatalf("refused after release: %v", f.tg.Calls())
+				}
+			}
+			if log := f.logBuf.String(); !strings.Contains(log, `"reason":"`+tt.reason+`"`) {
+				t.Fatalf("release reason %q not logged: %s", tt.reason, log)
+			}
+		})
+	}
+}
+
+// handle routes one topic message from the operator into thread 101.
+func handle(t *testing.T, f *bridgeFixture, text string) {
+	t.Helper()
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 50, text)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInboundClaudeOverlaySetsNoHold(t *testing.T) {
+	f := newBridgeFixture(t)
+	f.claude(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle))
+	f.herdr.SetScreen("p1", overlayScreen)
+	handle(t, f, "/usage")
+	f.fireCommand(t, 1)
+	if sent := f.tg.Sent(); len(sent) != 1 || sent[0].Footer != "" {
+		t.Fatalf("Sent = %+v", sent)
+	}
+	handle(t, f, "hello")
+	if p := f.herdr.Prompts(); len(p) != 2 || p[1] != "p1: hello" {
+		t.Fatalf("Prompts = %v", p)
+	}
+}
+
+func TestInboundPickerHoldFollowsKeyAndForget(t *testing.T) {
+	f := newBridgeFixture(t)
+	a := keptPicker(t, f)
+	next := domain.Key{PaneID: "p1", TerminalID: "t2"}
+	f.in.Reassociate(a.Key, next)
+	if _, ok := f.in.pickers[a.Key]; ok {
+		t.Fatal("hold left on the old key")
+	}
+	if h, ok := f.in.pickers[next]; !ok || h.word != "model" {
+		t.Fatalf("hold not moved: %+v", f.in.pickers)
+	}
+	f.in.Forget(next)
+	if len(f.in.pickers) != 0 {
+		t.Fatalf("hold kept after Forget: %+v", f.in.pickers)
+	}
+}
+
+func TestInboundForwardReadFailureOnCodexKeepsPicker(t *testing.T) {
+	f := newBridgeFixture(t)
+	f.withKind(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle), "codex")
+
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 31, "/usage")); err != nil {
+		t.Fatal(err)
+	}
+	f.herdr.FailNext("read", errors.New("read: timeout"))
+	f.fireCommand(t, 1)
+	assertCallsEqual(t, f.tg, "send:101:⚠️ screen read failed: read: timeout\n"+pickerHint+":reply=31")
+	if k := f.herdr.Keys(); len(k) != 0 {
+		t.Fatalf("picker dismissed: %+v", k)
+	}
+}
+
 func TestInboundForwardReadFailureStillDismisses(t *testing.T) {
 	f := newBridgeFixture(t)
-	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
-	a.Kind = "claude"
-	f.agents[a.Key] = a
+	f.claude(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle))
 
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 31, "/usage")); err != nil {
 		t.Fatal(err)
@@ -522,9 +742,7 @@ func TestInboundForwardReadFailureStillDismisses(t *testing.T) {
 
 func TestInboundForwardDismissFailureIsReported(t *testing.T) {
 	f := newBridgeFixture(t)
-	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
-	a.Kind = "claude"
-	f.agents[a.Key] = a
+	f.claude(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle))
 	f.herdr.SetScreen("p1", overlayScreen)
 
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 32, "/model")); err != nil {
@@ -540,9 +758,7 @@ func TestInboundForwardDismissFailureIsReported(t *testing.T) {
 
 func TestInboundForwardReplacesPending(t *testing.T) {
 	f := newBridgeFixture(t)
-	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
-	a.Kind = "claude"
-	f.agents[a.Key] = a
+	f.claude(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle))
 	f.herdr.SetScreen("p1", overlayScreen)
 
 	for _, id := range []int{33, 34} {
@@ -580,9 +796,7 @@ func TestInboundForwardAgentGoneBeforeFire(t *testing.T) {
 
 func TestInboundForwardTopicGoneStillDismisses(t *testing.T) {
 	f := newBridgeFixture(t)
-	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
-	a.Kind = "claude"
-	f.agents[a.Key] = a
+	a := f.claude(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle))
 
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 36, "/usage")); err != nil {
 		t.Fatal(err)
@@ -729,7 +943,7 @@ func TestInboundPresenceUnavailableAndTopicHint(t *testing.T) {
 	p := NewPresence(idle, f.opts, f.clock, nil)
 	f.in.SetPresence(p)
 	p.Poll(f.ctx)
-	if got := general(f, t, 2, "/here"); got != "🖥 quiet on until /away (no automatic idle source here)" {
+	if got := general(f, t, 2, "/here"); got != "🖥 quiet on until /away (no input idle source on this machine)" {
 		t.Fatalf("/here on unsupported platform = %q", got)
 	}
 	if got := general(f, t, 3, "/away 2h"); !strings.HasPrefix(got, "🏃 away until ") || !strings.HasSuffix(got, ", Telegram gets everything; /here returns to automatic") {

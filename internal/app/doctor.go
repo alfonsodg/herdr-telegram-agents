@@ -36,9 +36,15 @@ type Doctor struct {
 	// SupportedProtocols are the socket protocols verified by the adapter.
 	SupportedProtocols []int
 	Choices            domain.ChoiceSource
-	Timeout            time.Duration
-	Clock              domain.Clock
-	Log                *slog.Logger
+	// ClaudeUsage and CodexUsage are the quota sources; nil skips their
+	// check. ClaudeTap is the status line command prefix doctor suggests
+	// (`<exe> usage-tap --out <state>/claude-usage.json`).
+	ClaudeUsage domain.UsageSource
+	ClaudeTap   string
+	CodexUsage  domain.UsageSource
+	Timeout     time.Duration
+	Clock       domain.Clock
+	Log         *slog.Logger
 }
 
 // Run performs every check and returns them in report order.
@@ -76,6 +82,12 @@ func (d *Doctor) Run(ctx context.Context) []domain.Check {
 	add(d.checkHerdr(ctx))
 	add(d.checkDaemon(ctx))
 	add(d.checkMapping(ctx))
+	if d.ClaudeUsage != nil {
+		add(d.checkClaudeQuota(ctx))
+	}
+	if d.CodexUsage != nil {
+		add(d.checkCodexQuota(ctx))
+	}
 	ok, warn, fail := domain.Summarize(checks)
 	d.Log.Info("doctor done", slog.Int("ok", ok), slog.Int("warn", warn), slog.Int("fail", fail))
 	return checks
@@ -338,4 +350,42 @@ func sendTestReason(err error) string {
 		return "the bot cannot post in the group, add it again through the setup action"
 	}
 	return detailReason(err)
+}
+
+// claudeQuotaFresh is how old the tap's numbers may be before doctor asks
+// whether the tap is still installed.
+const claudeQuotaFresh = 24 * time.Hour
+
+// checkClaudeQuota reports the status line tap. It never fails: the quota
+// line is optional and a missing tap is a setup hint, not a fault.
+func (d *Doctor) checkClaudeQuota(ctx context.Context) domain.Check {
+	ctx, cancel := d.bounded(ctx)
+	defer cancel()
+	hint := "set statusLine.command in ~/.claude/settings.json to `" + d.ClaudeTap + " | <your status line command>` (or the tap alone)"
+	u, ok, err := d.ClaudeUsage.Usage(ctx)
+	switch {
+	case err != nil:
+		return domain.Check{Name: "claude quota", Level: domain.CheckWarn, Detail: "unreadable: " + detailReason(err)}
+	case !ok:
+		return domain.Check{Name: "claude quota", Level: domain.CheckOK, Detail: "not set up (optional): " + hint}
+	case d.Clock.Now().Sub(u.ObservedAt) > claudeQuotaFresh:
+		return domain.Check{Name: "claude quota", Level: domain.CheckOK,
+			Detail: "last seen " + u.ObservedAt.In(d.Clock.Now().Location()).Format("2006-01-02 15:04") + "; if the tap was removed: " + hint}
+	}
+	return domain.Check{Name: "claude quota", Level: domain.CheckOK, Detail: "from the status line, seen " + wallClock(d.Clock, u.ObservedAt)}
+}
+
+// checkCodexQuota reports whether a recent Codex session carries rate
+// limits. It never fails either.
+func (d *Doctor) checkCodexQuota(ctx context.Context) domain.Check {
+	ctx, cancel := d.bounded(ctx)
+	defer cancel()
+	u, ok, err := d.CodexUsage.Usage(ctx)
+	switch {
+	case err != nil:
+		return domain.Check{Name: "codex quota", Level: domain.CheckWarn, Detail: "unreadable: " + detailReason(err)}
+	case !ok:
+		return domain.Check{Name: "codex quota", Level: domain.CheckOK, Detail: "no Codex rate limits in the last 7 days of sessions"}
+	}
+	return domain.Check{Name: "codex quota", Level: domain.CheckOK, Detail: "from the session files, seen " + wallClock(d.Clock, u.ObservedAt)}
 }

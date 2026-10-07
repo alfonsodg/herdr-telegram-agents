@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -76,6 +77,16 @@ func TestStatusViewRender(t *testing.T) {
 	if got := (statusView{agents: []domain.Agent{b}, icons: domain.DefaultStatusIcons()}).render(); got != "1 agent\n⚡ ws · alpha &lt;x&gt;" {
 		t.Errorf("no topics = %q", got)
 	}
+	// Quota lines follow the list, the cap's tail included, and come
+	// before the footer; with no agents they follow "no agents".
+	capped.quota = "🔑 Codex 7d 3% ↻4 d 2 h"
+	capped.footer = "<i>updated 12:00</i>"
+	if got := capped.render(); got != "2 agents\n⚡ ws · alpha &lt;x&gt;\n… +1 more\n\n🔑 Codex 7d 3% ↻4 d 2 h\n\n<i>updated 12:00</i>" {
+		t.Errorf("capped with quota = %q", got)
+	}
+	if got := (statusView{quota: "🔑 Claude 5h 1% ↻2 h"}).body(); got != "no agents\n\n🔑 Claude 5h 1% ↻2 h" {
+		t.Errorf("no agents with quota = %q", got)
+	}
 }
 
 func TestStatusIncludesDurationsFromSince(t *testing.T) {
@@ -84,11 +95,11 @@ func TestStatusIncludesDurationsFromSince(t *testing.T) {
 	f.in.SetSince(func() map[domain.Key]time.Time {
 		return map[domain.Key]time.Time{a.Key: f.clock.Now().Add(-90 * time.Minute)}
 	})
-	if got := f.in.statusSummary(); got != "1 agent\n⚡ <a href=\"https://t.me/c/1234567890/101\">ws · alpha</a> · 1 h 30 min" {
+	if got := f.in.statusSummary(context.Background()); got != "1 agent\n⚡ <a href=\"https://t.me/c/1234567890/101\">ws · alpha</a> · 1 h 30 min" {
 		t.Errorf("status with since = %q", got)
 	}
 	f.in.SetSince(nil)
-	if got := f.in.statusSummary(); got != "1 agent\n⚡ <a href=\"https://t.me/c/1234567890/101\">ws · alpha</a>" {
+	if got := f.in.statusSummary(context.Background()); got != "1 agent\n⚡ <a href=\"https://t.me/c/1234567890/101\">ws · alpha</a>" {
 		t.Errorf("status without since = %q", got)
 	}
 }

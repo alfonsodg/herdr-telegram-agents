@@ -20,6 +20,16 @@ type privateFixture struct {
 	g      domain.ShareGrant
 	origin domain.ShareOrigin
 	now    time.Time
+	// agent is what f.s.Agent reports; tests move its status and
+	// StateChangeSeq through setAgent.
+	agent *domain.Agent
+}
+
+// setAgent moves the shared agent to status with a new StateChangeSeq and
+// returns it.
+func (f *privateFixture) setAgent(status domain.Status, seq int64) domain.Agent {
+	f.agent.Status, f.agent.StateChangeSeq = status, seq
+	return *f.agent
 }
 
 func newPrivateFixture(t *testing.T, role domain.ShareRole) *privateFixture {
@@ -30,7 +40,8 @@ func newPrivateFixture(t *testing.T, role domain.ShareRole) *privateFixture {
 	f.s.BotID = 42
 	f.s.Now = func() time.Time { return f.now }
 	a := domain.Agent{Key: domain.Key{PaneID: "p", TerminalID: "t", SessionDigest: "digest"}, Name: "agent", Status: domain.StatusIdle, Kind: "claude"}
-	f.s.Agent = func(k domain.Key) (domain.Agent, bool) { return a, k == a.Key }
+	f.agent = &a
+	f.s.Agent = func(k domain.Key) (domain.Agent, bool) { return *f.agent, k == f.agent.Key }
 	_, err := f.s.Register(ctx, 10, 10, "name", "", f.now)
 	if err != nil {
 		t.Fatal(err)
@@ -236,5 +247,40 @@ func TestPrivateGrantDeniedAfterSessionSwapBeforeSnapshot(t *testing.T) {
 	}
 	if _, _, d := f.s.Begin(ctx, f.origin, domain.ShareScreen); d.Allowed {
 		t.Fatal("stale grant still authorizes screen reads")
+	}
+}
+
+// TestPrivateForwardRefusedWhileBusy: a recipient's forwarded command is
+// refused while the agent works or waits at a dialog, as on the owner's
+// path: typed into a dialog its Enter would confirm the highlighted option.
+// /models exists on OpenCode only and is never typed into Claude Code.
+func TestPrivateForwardRefusedWhileBusy(t *testing.T) {
+	for _, tc := range []struct {
+		status domain.Status
+		text   string
+	}{
+		{domain.StatusBlocked, "/model"},
+		{domain.StatusBlocked, "/compact"},
+		{domain.StatusWorking, "/clear now"},
+		{domain.StatusWorking, "/usage"},
+		{domain.StatusIdle, "/models"},
+	} {
+		t.Run(string(tc.status)+tc.text, func(t *testing.T) {
+			f := newPrivateFixture(t, domain.ShareControl)
+			f.setAgent(tc.status, 1)
+			if err := f.p.Handle(context.Background(), domain.PrivateMessage{Contact: domain.PrivateContact{ActorID: 10}, Address: f.origin.Address, MessageID: 900, Text: tc.text}); err != nil {
+				t.Fatal(err)
+			}
+			if p := f.h.Prompts(); len(p) != 0 {
+				t.Fatalf("%s typed while %s: %v", tc.text, tc.status, p)
+			}
+		})
+	}
+	f := newPrivateFixture(t, domain.ShareControl)
+	if err := f.p.Handle(context.Background(), domain.PrivateMessage{Contact: domain.PrivateContact{ActorID: 10}, Address: f.origin.Address, MessageID: 901, Text: "/model"}); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.h.Prompts(); len(p) != 1 {
+		t.Fatalf("/model on an idle Claude agent not typed: %v", p)
 	}
 }

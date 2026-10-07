@@ -32,6 +32,8 @@ type Dashboard struct {
 	chatID   int64
 	clock    domain.Clock
 	log      *slog.Logger
+	// quota renders the usage lines; nil shows none.
+	quota *Quota
 
 	deb *debouncer
 	// mu guards since and last: Observe writes them on the daemon loop,
@@ -169,7 +171,7 @@ func (b *Dashboard) Stop(ctx context.Context) {
 		return
 	}
 	b.deb.Cancel(dashboardKey)
-	v := b.view()
+	v := b.view(ctx)
 	v.footer = "<i>⏹ stopped " + wallClock(b.clock, b.clock.Now()) + "</i>"
 	if err := b.tg.EditText(ctx, id, v.render(), true, nil); err != nil {
 		b.log.Warn("dashboard stop edit failed", slog.Int("message_id", id), slog.String("err", err.Error()))
@@ -178,8 +180,11 @@ func (b *Dashboard) Stop(ctx context.Context) {
 	b.log.Info("dashboard stopped", slog.Int("message_id", id))
 }
 
+// SetQuota wires the usage lines shown under the agents.
+func (b *Dashboard) SetQuota(q *Quota) { b.quota = q }
+
 // view assembles the renderer from the live state.
-func (b *Dashboard) view() statusView {
+func (b *Dashboard) view(ctx context.Context) statusView {
 	return statusView{
 		agents:    b.live(),
 		topics:    b.topics,
@@ -189,6 +194,7 @@ func (b *Dashboard) view() statusView {
 		chatID:    b.chatID,
 		since:     b.Since(),
 		now:       b.clock.Now(),
+		quota:     b.quota.Lines(ctx),
 		maxAgents: dashboardMaxAgents,
 	}
 }
@@ -206,7 +212,7 @@ func (b *Dashboard) refresh(ctx context.Context, reason string) error {
 		}
 		return b.remove(ctx, id)
 	}
-	v := b.view()
+	v := b.view(ctx)
 	body := v.body()
 	hash := hashText(body)
 	if id != 0 && hash == b.lastHash {

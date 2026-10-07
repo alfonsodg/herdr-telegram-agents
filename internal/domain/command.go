@@ -72,8 +72,22 @@ const (
 	KeyInterrupt = "ctrl+c"
 )
 
+// ClaudeKind is the agent kind Herdr reports for Claude Code panes.
+const ClaudeKind = "claude"
+
+// OpenCodeKind is the Herdr agent kind of OpenCode panes.
+const OpenCodeKind = "opencode"
+
 // DefaultAgentKind is what /new starts when no kind is given.
-const DefaultAgentKind = "claude"
+const DefaultAgentKind = ClaudeKind
+
+// DismissesOverlay reports whether a forwarded overlay command gets its
+// automatic esc on an agent of this kind. The esc is for Claude Code
+// overlays; other kinds (Codex, OpenCode, an unknown kind) keep their
+// picker open for /keys, because their pickers take a choice.
+func DismissesOverlay(kind string) bool {
+	return strings.EqualFold(kind, ClaudeKind)
+}
 
 // AgentKinds lists the kinds `herdr agent start` accepts (Herdr 0.9.3, from
 // `herdr agent start --help`, in its order). /new treats its last word as a kind only when
@@ -171,21 +185,30 @@ const (
 // ForwardRule describes the follow-up of one forwarded command.
 type ForwardRule struct {
 	Post ForwardPost
-	// Dismiss sends esc after the screen was read because the command
-	// left an overlay open (/usage, the /model picker).
+	// Dismiss marks a command that leaves an overlay or picker open
+	// (/usage, the /model picker): Claude Code gets esc after the screen
+	// was read, other kinds keep it open (see DismissesOverlay).
 	Dismiss bool
+	// Kind is the only agent kind that has this command; empty means any.
+	// On another kind the word would run as a plain prompt.
+	Kind string
 }
 
-// forwardRules maps the commands an operator may send from a topic to their
-// follow-up. The Claude Code words and OpenCode's /models picker are here; a
-// word missing from the list stays an unknown command, so a typo in a plugin
+// Fits reports whether the command exists on an agent of kind.
+func (r ForwardRule) Fits(kind string) bool {
+	return r.Kind == "" || strings.EqualFold(r.Kind, kind)
+}
+
+// forwardRules maps the agent commands an operator may send from a topic
+// to their follow-up: the Claude Code words plus OpenCode's /models picker.
+// A word missing here stays an unknown command, so a typo in a plugin
 // command never reaches the agent as a prompt.
 var forwardRules = map[string]ForwardRule{
 	"clear":   {Post: ForwardPostTail},
 	"compact": {Post: ForwardPostNone},
 	"usage":   {Post: ForwardPostScreen, Dismiss: true},
 	"model":   {Post: ForwardPostScreen, Dismiss: true},
-	"models":  {Post: ForwardPostScreen},
+	"models":  {Post: ForwardPostScreen, Dismiss: true, Kind: OpenCodeKind},
 }
 
 // forwardRuleFor resolves the rule for a slash word; /model with a name

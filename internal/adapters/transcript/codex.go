@@ -129,7 +129,7 @@ func (r *CodexReader) LastReply(ctx context.Context, agent domain.Agent) (domain
 	}
 	tuple, err := r.session(ctx, agent.PaneID)
 	if err != nil {
-		return domain.Reply{}, classifyCodexError(ctx, err, "session lookup failed")
+		return domain.Reply{}, classifySessionError(ctx, err, "session lookup failed")
 	}
 	if err := ctx.Err(); err != nil {
 		return domain.Reply{}, err
@@ -187,7 +187,10 @@ func (r *CodexReader) LastReply(ctx context.Context, agent domain.Agent) (domain
 	return domain.Reply{Text: text, Source: "codex rollout", Age: age, Written: written, Meta: meta}, nil
 }
 
-func classifyCodexError(ctx context.Context, err error, category string) error {
+// classifySessionError turns a failed Herdr lookup (session tuple, pane
+// processes) into ErrNoReply with a category, keeping cancellation as is so
+// the caller stops instead of posting the screen.
+func classifySessionError(ctx context.Context, err error, category string) error {
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return ctxErr
 	}

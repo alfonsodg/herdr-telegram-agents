@@ -60,7 +60,7 @@ Anything you write in a topic reaches the agent:
 | `y`, `n`, `yes`, `no`, `1`..`9`, `enter`, `ok`, `esc` while the agent is blocked | the matching key (`agent.send_keys`); in any other status these are prompts. Pressing a button under the question sends its number the same way |
 | plain text while the agent is blocked | typed into the dialog and submitted with Enter (`pane.send_text` + `agent.send_keys`), because `agent.prompt` refuses an agent waiting at a question or approval UI; see [Questions and buttons](behaviour.md#questions-and-buttons) |
 | `/keys esc enter` | raw key names |
-| `/screen` | for idle or done OpenCode, Codex, Muse and Antigravity agents, the current session's last reply rendered with bold, lists, links, and code blocks, up to five messages (for Codex the final answer of the last turn, not cut at the screen height); if unavailable, the visible screen. Claude Code and other agents always show the visible screen. Working and blocked agents show their progress or dialog from the screen |
+| `/screen` | for idle or done OpenCode, Codex, Antigravity (`agy`), Pi and Muse, the current session's last reply rendered with bold, lists, links, and code blocks, up to five messages (for Codex, Antigravity, Pi and Muse the final answer of the last turn, not cut at the screen height); if unavailable, the visible screen. Claude Code and other agents always show the visible screen. Working and blocked agents show their progress or dialog from the screen |
 | `/screen 40` | the visible screen's last 40 lines (max 200), never the reply; the input frame is cut afterwards, so an idle Claude Code pane may answer with fewer than 40 lines |
 | `/screen all` | everything the agent printed since your last message (typed in Herdr or sent here); long output arrives as a `.txt` file |
 | `/focus` | the pane is brought to the front in Herdr |
@@ -68,7 +68,7 @@ Anything you write in a topic reaches the agent:
 | `/stop` | `esc` through `agent.send_keys`, in any status: Claude Code cancels the running turn or dismisses the open dialog; the reply is `⏹ sent esc` |
 | `/interrupt` | `ctrl+c` through `agent.send_keys`, in any status: a hard interrupt; the reply is `⛔ sent ctrl+c` |
 | `/close` | the question `Close <label>? The pane and its tab go away.` with `Yes, close` / `No` buttons; `Yes` closes the pane through `pane.close` (the tab goes with it when it held nothing else) and the topic gets 🏁 through the usual exit path; `No` keeps everything. Only the latest question of an agent acts; see [Questions and buttons](behaviour.md#questions-and-buttons) |
-| `/clear`, `/compact [instructions]`, `/usage`, `/model [name]`, `/models` | typed into the agent as its own command; two seconds later the screen is posted as a quoted reply (`/usage` and a bare `/model` are closed with `esc` for Claude Code only); only while the agent is idle |
+| `/clear`, `/compact [instructions]`, `/usage`, `/model [name]`, `/models` | typed into the agent as its own command (`/models` is OpenCode's model picker); two seconds later the screen is posted as a quoted reply; only while the agent is idle. On Claude Code `/usage` and a bare `/model` are closed with `esc` for you; other agents keep their picker open, see [Claude Code commands](#claude-code-commands) |
 | `/status` | `<emoji> <status> · <label> · pane <id>` |
 | `/options` | a hint: the settings panel lives in General |
 | `/away`, `/here`, `/new`, `/observers` | a hint: these commands live in General |
@@ -94,10 +94,34 @@ posts nothing itself: the topic icon turns ⚡ while it runs and the usual
 blocked is refused with a hint, because the text would land in the running
 turn or in a dialog and the `esc` could interrupt it; Herdr's detection dips
 out of **working** for a second or two while a tool runs, so a refusal can be
-spurious, just send the command again. Agents of other kinds (Codex, Gemini)
-get the same text as-is and the screen post shows how they reacted. `/models`
-(OpenCode's model picker) is forwarded the same way and, like every non-Claude
-picker, stays open for `/keys` (`down`, `up`, `enter`) to drive.
+spurious, just send the command again.
+
+Agents of other kinds (Codex, OpenCode, Gemini) get the same text as-is and
+the screen post shows how they reacted. Their `/model` and `/usage` open a
+picker or menu that takes a choice, so the automatic `esc` is sent to Claude
+Code only: elsewhere the picker stays open and the screen post ends with
+`picker left open: /keys up, down, enter to choose, /stop to close`. Choose
+with `/keys` (`/keys down`, `/keys enter`; Codex also takes the option
+number, `/keys 2`) or close it with `/stop`.
+
+An open picker would swallow your next plain message: Codex takes its Enter
+as a choice, OpenCode types it into the picker's filter. So the first plain
+message after a kept picker (short replies such as `y` or `1` included) is
+not typed; it gets `⚠️ the /model picker may still be open, so this was not
+sent: choose with /keys up, down, enter or close it with /stop, then send it
+again`. The hold is one-shot because the bridge cannot see whether the picker
+was closed at the desk: send the message again and it goes through. `/keys`,
+`/stop`, `/interrupt`, another of these commands, a change of the agent's
+status, or ten minutes release the hold without a refusal. A photo or file
+sent first is held back the same way: it is saved to the inbox, but its
+prompt is not typed, so send it again. The free text after a ✏️ press is
+typed as before and is not held back.
+
+OpenCode's own name for its model picker is `/models`; it is in the `/`
+menu, and `/model` opens the same picker. Either behaves like the pickers
+above: the picker stays open for `/keys` and the next plain message is held
+back once. `/models` is refused on other agent kinds, which have no such
+command.
 
 ## Agent control
 
@@ -168,10 +192,10 @@ and the commands appear in Telegram's `/` menu for the group.
 
 | You write | What happens |
 |-----------|--------------|
-| `/status` | every live agent with its status emoji, a link to its topic and, once known, how long it has been in that status (`· 12 min`); the first line says when quiet mode is holding edits (`🔕 …`), when you are away by hand (`🏃 …`) or when sync is off (`🔇 …`). The same text, with an `updated HH:MM` footer, is the pinned dashboard, which lists at most 40 agents and sums up the rest as `… +N more`; see [The dashboard](behaviour.md#the-dashboard) |
+| `/status` | every live agent with its status emoji, a link to its topic and, once known, how long it has been in that status (`· 12 min`); the first line says when quiet mode is holding edits (`🔕 …`), when you are away by hand (`🏃 …`) or when sync is off (`🔇 …`). Below the agents come the Claude and Codex quota lines when there are numbers for them (`🔑 Codex 7d 3% ↻4 d 2 h`, see [Quota lines](behaviour.md#quota-lines)). The same text, with an `updated HH:MM` footer, is the pinned dashboard, which lists at most 40 agents and sums up the rest as `… +N more`; see [The dashboard](behaviour.md#the-dashboard) |
 | `/options` | the settings panel: sync, quiet mode, status icons, secret redaction, topic cleanup, and a two-press plugin update action; see [Options](behaviour.md#options) and [Plugin updates](behaviour.md#plugin-updates) |
-| `/away`, `/away 2h` | you count as away until `/here`, or for that long (any Go duration from `1m` to `168h`): held topic edits and posts go out at once; see [Quiet while at the desk](behaviour.md#quiet-while-at-the-desk). It also releases the at-desk default of a machine with no idle source; a timed `/away` hands the default back when it expires |
-| `/here` | presence is automatic again; where no idle source exists (headless machines, KDE Wayland today) it turns quiet on by hand until `/away`; the reply says the current verdict |
+| `/away`, `/away 2h` | you count as away until `/here`, or for that long (any Go duration from `1m` to `168h`): held topic edits and posts go out at once; see [Quiet while at the desk](behaviour.md#quiet-while-at-the-desk). On a machine without an input idle source (KDE Plasma on Wayland, a Linux server without a desktop session) it releases the at-desk default: Telegram starts catching up, and a timed `/away` hands the default back when it expires |
+| `/here` | presence is automatic again; where no idle source exists it turns quiet on by hand until `/away`; the reply says the current verdict |
 | `/new <workspace> [kind]` | opens an unfocused tab in that workspace (`tab.create`, Herdr's default directory and label) and starts an agent in its root pane (`agent.start`). The workspace is matched by label, case-insensitive: an exact match wins, else a unique prefix (`/new wor` for `Work`); labels may contain spaces. The last word is the kind only when Herdr knows it (`pi`, `claude`, `codex`, `gemini`, `cursor`, `devin`, `agy`, `cline`, `omp`, `mastracode`, `opencode`, `copilot`, `kimi`, `kiro`, `droid`, `amp`, `grok`, `hermes`, `kilo`, `qodercli`, `qwen`, `letta`, `maki`, `muse`), default `claude`; no arguments reach the agent. The first reply is `starting <kind> in <workspace> …`, the second, up to a minute later, `started <kind> in <workspace> (pane <id>)` or `⚠️ <kind> did not start in <workspace>: <reason>`; the topic appears through the ordinary sync. A bare `/new`, an unknown or an ambiguous label answer with the workspace list |
 | `/observers`, `/observers add <id>`, `/observers remove <id>` | the operator and observer lists plus the unknown accounts seen recently (name, `@username`, id, when and where); add or remove an observer, saved to `config.json` and applied at once. An observer may use `/status` and `/help` here and nothing else; see [Operators and observers](behaviour.md#operators-and-observers) |
 | `/help` | the command list |
@@ -226,12 +250,17 @@ requests in a separate operating-system account.
 | `/agents`, `/status`, `/help`, `/screen [N]` | Read or Control |
 | `/screen all` | History captured after this grant's activation |
 | Prompts, supported files, dialog buttons, `/keys`, `/stop`, `/interrupt` | Control |
-| `/clear`, `/compact`, `/usage`, `/model` | Control; Claude Code only |
+| `/clear`, `/compact`, `/usage`, `/model` | Control; Claude Code only, so no picker is ever left open on a shared agent; refused while the agent works or waits at a dialog, as in the owner's topics |
 | `/git status`, `/git diff`, `/git log` | Control, or Read with repository-read enabled |
 | `/close` | Control plus close-agent permission; separate confirmation |
 | `/focus` | Control plus local-focus permission |
 | `/pause`, `/resume`, `/alias NAME` | Local mirror settings; Read or Control |
 | `/silent`, `/display screen\|reply\|formatted`, `/fold 0..200`, `/metadata` | Local display and notification settings |
+
+Dialog buttons in a private topic answer only the question they were drawn
+under: once that question is answered elsewhere, or a newer post replaces the
+keyboard, a press answers `That question is no longer open.` and sends
+nothing.
 
 `/silent` and `/metadata` toggle their settings. `/alias` without a name restores
 the agent label. Pausing suppresses automatic output and status edits; explicit

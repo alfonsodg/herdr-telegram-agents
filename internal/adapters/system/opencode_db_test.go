@@ -29,7 +29,7 @@ func sqliteJSON(t *testing.T, rows ...sqliteRow) []byte {
 // CLI stand-in prints sentinel, so a surprise fallback is visible.
 func dbExport(t *testing.T, out []byte, err error) *OpenCodeExporter {
 	t.Helper()
-	e := NewOpenCodeExporter(nil)
+	e := NewOpenCodeExporter("", nil)
 	e.dbPath = func() (string, error) { return "/nonexistent/opencode.db", nil }
 	e.sqlite = func(ctx context.Context, dbPath, query string) ([]byte, error) {
 		if !strings.Contains(query, "session_message") || !strings.Contains(query, "type='user'") {
@@ -134,7 +134,7 @@ func TestOpenCodeExporterFallsBackWhenDatabaseEmpty(t *testing.T) {
 }
 
 func TestOpenCodeExporterRejectsDatabaseUnsafeSessionIDs(t *testing.T) {
-	e := NewOpenCodeExporter(nil)
+	e := NewOpenCodeExporter("", nil)
 	e.dbPath = func() (string, error) { return "/nonexistent/opencode.db", nil }
 	e.sqlite = func(context.Context, string, string) ([]byte, error) {
 		t.Fatal("database must not be queried with an unsafe session id")
@@ -169,7 +169,7 @@ func TestOpenCodeExporterRealDatabase(t *testing.T) {
 	if sessionID == "" {
 		t.Skip("set OPENCODE_TEST_SESSION to a real session id to run against the database")
 	}
-	e := NewOpenCodeExporter(nil)
+	e := NewOpenCodeExporter("", nil)
 	out, err := e.Export(context.Background(), sessionID)
 	if err != nil {
 		t.Fatalf("Export(%s) err = %v", sessionID, err)

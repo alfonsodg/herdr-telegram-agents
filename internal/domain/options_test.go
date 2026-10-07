@@ -212,12 +212,13 @@ func TestOptionGroupsAndSpecs(t *testing.T) {
 	if got := OptionsInGroup(GroupAppearance); len(got) != 6 || got[0].Key != "icons.working" || got[5].Key != "icons.exited" {
 		t.Errorf("appearance options = %+v", got)
 	}
-	if got := OptionsInGroup(GroupSync); len(got) != 2 || got[0].Key != OptionSyncEnabled || got[0].Kind != KindBool ||
-		got[1].Key != OptionSyncDashboard || got[1].Kind != KindBool || got[1].Default != "true" {
+	if got := OptionsInGroup(GroupSync); len(got) != 3 || got[0].Key != OptionSyncEnabled || got[0].Kind != KindBool ||
+		got[1].Key != OptionSyncDashboard || got[1].Kind != KindBool || got[1].Default != "true" ||
+		got[2].Key != OptionSyncQuota || got[2].Kind != KindBool || got[2].Default != "true" {
 		t.Errorf("sync options = %+v", got)
 	}
-	if o := DefaultOptions(); !o.DashboardEnabled() || !o.PagerEnabled() {
-		t.Error("dashboard and pager must default to on")
+	if o := DefaultOptions(); !o.DashboardEnabled() || !o.PagerEnabled() || !o.QuotaEnabled() {
+		t.Error("dashboard, quota and pager must default to on")
 	}
 	off, _ := DefaultOptions().With(OptionPostsPager, "false")
 	if off.PagerEnabled() || !off.DashboardEnabled() {

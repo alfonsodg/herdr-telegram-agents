@@ -178,6 +178,10 @@ func (b *Bridge) PagerReachable() bool { return b.out.PagerReachable() }
 // /status so it shows the same durations.
 func (b *Bridge) SetStatusSince(fn func() map[domain.Key]time.Time) { b.in.SetSince(fn) }
 
+// SetStatusQuota wires the usage lines into /status, the same ones the
+// dashboard shows.
+func (b *Bridge) SetStatusQuota(q *Quota) { b.in.SetQuota(q) }
+
 // SetSettle overrides the screen and command settle delays (tests).
 func (b *Bridge) SetSettle(d time.Duration) {
 	b.out.deb.delay = d

@@ -372,7 +372,7 @@ func TestOutboundScreenPrefersFreshReply(t *testing.T) {
 }
 
 func TestOutboundScreenOtherKindsKeepTheScreen(t *testing.T) {
-	for _, kind := range []string{"claude", "gemini", "pi", ""} {
+	for _, kind := range []string{"claude", "gemini", "omp", ""} {
 		f := newBridgeFixture(t)
 		a := f.add(t, "p1", "t1", "a", domain.StatusIdle)
 		a.Kind = kind
@@ -388,35 +388,43 @@ func TestOutboundScreenOtherKindsKeepTheScreen(t *testing.T) {
 	}
 }
 
-// TestOutboundScreenCodexUsesReply covers a bare /screen on Codex: an idle
-// or done agent posts its final answer whole (it can be taller than the
-// screen), a working or blocked one still gets the screen, and /screen N
-// stays a literal screen read.
+// TestOutboundScreenCodexUsesReply covers a bare /screen on Codex,
+// Antigravity (agy), pi and Muse: an idle or done agent posts its final answer whole (it
+// can be taller than the screen), a working or blocked one still gets the
+// screen, and /screen N stays a literal screen read.
 func TestOutboundScreenCodexUsesReply(t *testing.T) {
 	answer := "Plan:\n1. Do the **first** thing.\n2. Then the second."
-	for _, st := range []domain.Status{domain.StatusIdle, domain.StatusDone, domain.StatusWorking, domain.StatusBlocked} {
-		for _, lines := range []int{0, 10} {
-			f := newBridgeFixture(t)
-			a := f.add(t, "p1", "t1", "a", st)
-			a.Kind = "codex"
-			f.agents[a.Key] = a
-			f.herdr.SetScreen("p1", "codex screen tail")
-			f.replies.Set(a.Key, answer)
-			if err := f.out.Screen(f.ctx, a.Key, lines); err != nil {
-				t.Fatal(err)
-			}
-			sent := f.tg.Sent()
-			wantReply := lines == 0 && st.ReadyForInput()
-			if wantReply {
-				if len(sent) != 1 || sent[0].Text != answer || !sent[0].Markdown || sent[0].Code || sent[0].MaxParts != replyMaxParts || len(f.herdr.Reads()) != 0 {
-					t.Fatalf("%s /screen %d: sent %+v, reads %v; want the answer, rendered and bounded", st, lines, sent, f.herdr.Reads())
-				}
-				continue
-			}
-			if len(sent) != 1 || sent[0].Text != "codex screen tail" || !sent[0].Code || len(f.replies.Calls()) != 0 {
-				t.Fatalf("%s /screen %d: sent %+v, calls %v; want the screen and no reply lookup", st, lines, sent, f.replies.Calls())
+	for _, kind := range []string{"codex", "agy", "pi", "muse"} {
+		for _, st := range []domain.Status{domain.StatusIdle, domain.StatusDone, domain.StatusWorking, domain.StatusBlocked} {
+			for _, lines := range []int{0, 10} {
+				screenReplyCase(t, kind, st, lines, answer)
 			}
 		}
+	}
+}
+
+// screenReplyCase runs one bare or counted /screen on an agent of kind in
+// status st whose reply source has answer.
+func screenReplyCase(t *testing.T, kind string, st domain.Status, lines int, answer string) {
+	t.Helper()
+	f := newBridgeFixture(t)
+	a := f.add(t, "p1", "t1", "a", st)
+	a.Kind = kind
+	f.agents[a.Key] = a
+	f.herdr.SetScreen("p1", "screen tail")
+	f.replies.Set(a.Key, answer)
+	if err := f.out.Screen(f.ctx, a.Key, lines); err != nil {
+		t.Fatal(err)
+	}
+	sent := f.tg.Sent()
+	if lines == 0 && st.ReadyForInput() {
+		if len(sent) != 1 || sent[0].Text != answer || !sent[0].Markdown || sent[0].Code || sent[0].MaxParts != replyMaxParts || len(f.herdr.Reads()) != 0 {
+			t.Fatalf("%s %s /screen %d: sent %+v, reads %v; want the answer, rendered and bounded", kind, st, lines, sent, f.herdr.Reads())
+		}
+		return
+	}
+	if len(sent) != 1 || sent[0].Text != "screen tail" || !sent[0].Code || len(f.replies.Calls()) != 0 {
+		t.Fatalf("%s %s /screen %d: sent %+v, calls %v; want the screen and no reply lookup", kind, st, lines, sent, f.replies.Calls())
 	}
 }
 
@@ -461,32 +469,6 @@ func TestOutboundOpenCodeExportTimeoutFallsBackToScreen(t *testing.T) {
 	}
 	if len(f.replies.Calls()) != 1 || len(f.herdr.Reads()) != 1 || len(f.tg.Sent()) != 1 || f.tg.Sent()[0].Text != "terminal fallback" {
 		t.Fatalf("fallback: replies %v, reads %v, sent %v", f.replies.Calls(), f.herdr.Reads(), f.tg.Sent())
-	}
-}
-
-// TestOutboundOpenCodePendingReplyPostsNothing: a done post whose reply is
-// an in-flight turn fragment must post nothing at all — no fragment, no
-// screen tail — and leave the real turn end to produce the full answer.
-func TestOutboundOpenCodePendingReplyPostsNothing(t *testing.T) {
-	f := newBridgeFixture(t)
-	if err := f.opts.Set(f.ctx, domain.OptionPostsDone, string(domain.DoneFormatted), 1); err != nil {
-		t.Fatal(err)
-	}
-	a := f.add(t, "p1", "t1", "a", domain.StatusWorking)
-	a.Kind = "opencode"
-	f.agents[a.Key] = a
-	f.herdr.SetScreen("p1", "terminal fallback")
-	f.replies.Fail(a.Key, fmt.Errorf("%w: the turn is still running", domain.ErrReplyPending))
-	f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusDone)})
-	f.fire(t, 1)
-	if len(f.herdr.Reads()) != 0 || len(f.tg.Sent()) != 0 {
-		t.Fatalf("pending reply must post nothing: reads %v, sent %v", f.herdr.Reads(), f.tg.Sent())
-	}
-	if !strings.Contains(f.logBuf.String(), "reply not ready, post skipped") {
-		t.Fatalf("skip not logged: %s", f.logBuf.String())
-	}
-	if f.clock.Pending() == 0 {
-		t.Fatal("no retry armed for the pending reply")
 	}
 }
 
@@ -1207,7 +1189,7 @@ func TestOutboundDoneSummaryLineUnavailable(t *testing.T) {
 	}
 	a := f.add(t, "p1", "t1", "reviewer", domain.StatusWorking)
 	f.herdr.SetScreen("p1", "recap: all tests pass")
-	f.replies.Fail(a.Key, fmt.Errorf("%w: unsupported agent %q", domain.ErrUnsupportedAgent, "codex"))
+	f.replies.Fail(a.Key, fmt.Errorf("%w: unsupported agent %q", domain.ErrNoReply, "codex"))
 	f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusDone)})
 	f.fire(t, 1)
 	if sent := f.tg.Sent(); len(sent) != 1 || sent[0].Footer != "" || sent[0].Text != "recap: all tests pass" {
@@ -1311,7 +1293,7 @@ func TestOutboundDoneReplyFallsBackToScreen(t *testing.T) {
 	}
 	a := f.add(t, "p1", "t1", "reviewer", domain.StatusWorking)
 	f.herdr.SetScreen("p1", "recap: all tests pass")
-	f.replies.Fail(a.Key, fmt.Errorf("%w: unsupported agent %q", domain.ErrUnsupportedAgent, "codex"))
+	f.replies.Fail(a.Key, fmt.Errorf("%w: unsupported agent %q", domain.ErrNoReply, "codex"))
 	f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusDone)})
 	f.fire(t, 1)
 	sent := f.tg.Sent()
@@ -2240,7 +2222,7 @@ func TestOutboundDoneDefaultsToFormatted(t *testing.T) {
 	}
 	b := f.add(t, "p2", "t2", "shell", domain.StatusWorking)
 	f.herdr.SetScreen("p2", "$ make test")
-	f.replies.Fail(b.Key, fmt.Errorf("%w: unsupported agent %q", domain.ErrUnsupportedAgent, "pi"))
+	f.replies.Fail(b.Key, fmt.Errorf("%w: unsupported agent %q", domain.ErrNoReply, "pi"))
 	f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(b, domain.StatusDone)})
 	f.fire(t, 1)
 	if sent := f.tg.Sent(); len(sent) != 1 || sent[0].Text != "$ make test" || !sent[0].Code {
@@ -2298,66 +2280,5 @@ func TestFreshReplySlack(t *testing.T) {
 		!freshReply(true, time.Time{}, domain.Reply{Written: start}) ||
 		!freshReply(true, start, domain.Reply{}) {
 		t.Fatal("unknown comparisons must count as fresh")
-	}
-}
-
-// TestOutboundUnreadableNotice: after unreadableNoticeAfter consecutive
-// done posts whose reply could not be read, one notice lands in the topic;
-// a readable reply clears the streak and an unsupported kind never counts.
-func TestOutboundUnreadableNotice(t *testing.T) {
-	f := newBridgeFixture(t)
-	f.herdr.SetScreen("p1", "raw screen text")
-	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
-	fail := fmt.Errorf("%w: export failed", domain.ErrNoReply)
-	f.replies.Fail(a.Key, fail)
-	turn := func() {
-		f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusWorking)})
-		f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusDone)})
-		f.fire(t, 1)
-	}
-	notices := func() int {
-		n := 0
-		for _, s := range f.tg.Sent() {
-			if s.Text == unreadableNotice {
-				n++
-			}
-		}
-		return n
-	}
-	for i := 0; i < unreadableNoticeAfter-1; i++ {
-		turn()
-	}
-	if got := notices(); got != 0 {
-		t.Fatalf("notice before the streak: %d", got)
-	}
-	turn()
-	if got := notices(); got != 1 {
-		t.Fatalf("notices after the streak = %d, want 1", got)
-	}
-	// A readable reply clears the streak: the next failures start over.
-	f.replies.Set(a.Key, "the answer")
-	f.replies.SetMeta(a.Key, domain.TurnMeta{}, f.clock.Now().Add(time.Second))
-	turn()
-	f.replies.Fail(a.Key, fail)
-	for i := 0; i < unreadableNoticeAfter-1; i++ {
-		turn()
-	}
-	if got := notices(); got != 1 {
-		t.Fatalf("notices after a readable reply = %d, want 1", got)
-	}
-	// An unsupported kind never counts towards the notice.
-	g := newBridgeFixture(t)
-	g.herdr.SetScreen("p1", "raw screen text")
-	b := g.add(t, "p1", "t1", "shell", domain.StatusIdle)
-	g.replies.Fail(b.Key, fmt.Errorf("%w: unsupported agent %q", domain.ErrUnsupportedAgent, "shell"))
-	for i := 0; i < unreadableNoticeAfter+1; i++ {
-		g.out.Observe(AgentEvent{Kind: AgentChanged, Agent: g.setStatus(b, domain.StatusWorking)})
-		g.out.Observe(AgentEvent{Kind: AgentChanged, Agent: g.setStatus(b, domain.StatusDone)})
-		g.fire(t, 1)
-	}
-	for _, s := range g.tg.Sent() {
-		if s.Text == unreadableNotice {
-			t.Fatal("unsupported kind got the unreadable notice")
-		}
 	}
 }

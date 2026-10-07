@@ -26,6 +26,13 @@ const (
 	// replyMaxParts caps a done post taken from the transcript: a reply
 	// longer than this many messages is cut with a trailer.
 	replyMaxParts = 5
+	// replyPendingRetries and replyPendingDelay bound the wait for a done
+	// post whose reply source says the turn is still running (OpenCode
+	// reports done at every step of a turn): the post is fired again up to
+	// this many times this far apart, then the screen is posted. The real
+	// turn end usually arrives first as a new done event.
+	replyPendingRetries = 3
+	replyPendingDelay   = 5 * time.Second
 	// defaultFoldLines is the fold threshold used without an options
 	// registry (tests); it mirrors the posts.fold default.
 	defaultFoldLines = 20
@@ -63,6 +70,10 @@ const (
 	// commandTailLines is the tail posted after a forwarded command that
 	// prints a short confirmation (/clear, /model <name>).
 	commandTailLines = 12
+	// pickerHold is how long a picker kept open on a non-Claude agent
+	// still holds back the next plain topic message; past it the bridge
+	// assumes the picker was handled at the desk.
+	pickerHold = 10 * time.Minute
 	// sweepInterval is how often the daemon looks for stale topics to
 	// delete, on top of the pass at start and the one an option change
 	// requests.
@@ -101,6 +112,11 @@ const (
 	// stays one Telegram message (4096 chars) whatever the agent count;
 	// the rest is summed up as "+N more".
 	dashboardMaxAgents = 40
+	// quotaRefresh is how often the quota lines re-read their sources;
+	// quotaStale is the age after which a line says when its numbers are
+	// from.
+	quotaRefresh = 60 * time.Second
+	quotaStale   = 30 * time.Minute
 	// pagerLines is how many trailing screen lines the pager message in the
 	// bot's private chat carries when the question is not a numbered
 	// dialog; a dialog lists its options instead.
@@ -110,21 +126,16 @@ const (
 	typingTimeout = 10 * time.Minute
 	// typingHeadRunes is how much of the typed text the ✅ ✏️ button shows.
 	typingHeadRunes = 30
-	// presenceUnsupportedRetry is how often a platform that reported no
-	// input idle source is asked again: a session can appear later (a
-	// desktop logs in, a helper gets installed), so quiet mode must recover
-	// without a restart.
-	presenceUnsupportedRetry = time.Minute
-	// pendingRetryDelay re-reads a reply whose turn is not over yet: the
-	// done post is skipped and retried after this delay instead of falling
-	// back to a fragment or losing the post when no further status change
-	// follows.
-	pendingRetryDelay = 3 * time.Second
 	// turnStartSlack forgives the gap between the real start of a turn and
 	// the moment the daemon sees the working status (and second-precision
 	// transcript timestamps) when judging whether a reply belongs to the
 	// current turn.
 	turnStartSlack = 3 * time.Second
+	// presenceUnsupportedRetry is how often a machine that reported no
+	// input idle source is asked again: a session can appear later (a
+	// desktop logs in, a helper gets installed), so quiet mode must
+	// recover without a restart.
+	presenceUnsupportedRetry = time.Minute
 	// unreadableNoticeAfter is how many consecutive done posts of an agent
 	// with a reader may fail to read a reply before one notice lands in its
 	// topic, so a reader that stopped working never degrades to screens

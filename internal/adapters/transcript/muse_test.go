@@ -1,11 +1,14 @@
 package transcript
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,121 +16,474 @@ import (
 	"github.com/permgps/herdr-telegram-agents/internal/domain"
 )
 
-// museFixture writes a miniature Muse state tree: one runtime session file
-// and the durable log of one session.
-type museFixture struct {
-	home    string
-	session string
-	lines   []string
+// The session ids and the pid are made up; museTestSecret marks text that
+// must never reach a log line.
+const (
+	museTestID     = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+	museTestOther  = "0199a1b2-c3d4-7e5f-8a9b-ffffffffffff"
+	museTestPID    = 48213
+	museTestLabel  = "api"
+	museTestSecret = "PRIVATE-MUSE-OUTPUT"
+	museTestRun    = "run-0001"
+)
+
+var (
+	museT0 = time.Date(2026, 10, 6, 13, 0, 0, 0, time.UTC) // run started
+	museT1 = museT0.Add(75 * time.Second)                  // final message
+)
+
+// museLine renders one durable log record in the upstream envelope.
+func museLine(at time.Time, run string, event map[string]any) string {
+	rec := map[string]any{
+		"schema_version": 1, "id": "evt", "sequence": 1, "recorded_at": at.UnixMicro(),
+		"record_type": "event", "durability": "durable",
+		"stream":       map[string]any{"kind": "session", "id": museTestID},
+		"payload_type": "runtime.session", "payload_schema_version": 1,
+		"payload": map[string]any{"kind": "run", "run_id": run, "event": event},
+	}
+	b, err := json.Marshal(rec)
+	if err != nil {
+		panic(err)
+	}
+	return string(b)
 }
 
-const museSessionID = "01a10885-b7fb-7ef0-95cd-4fb8af9067ca"
+func museStarted(at time.Time, run string) string {
+	return museLine(at, run, map[string]any{"kind": "started", "prompt": "do it " + museTestSecret})
+}
 
-func newMuseFixture(t *testing.T, workspace string, lines []string) *museFixture {
+func museDelta(at time.Time, run string) string {
+	return museLine(at, run, map[string]any{"kind": "text_delta", "message_id": "m", "text": "partial"})
+}
+
+// museCommitted is a whole message; phase "" leaves the field out.
+func museCommitted(at time.Time, run, phase, text string) string {
+	event := map[string]any{"kind": "assistant_message_committed", "message_id": "m", "text": text}
+	if phase != "" {
+		event["phase"] = phase
+	}
+	return museLine(at, run, event)
+}
+
+func museTerminal(at time.Time, run, terminal string) string {
+	return museLine(at, run, map[string]any{"kind": "terminal", "terminal": terminal, "reason": nil})
+}
+
+// museTurn is a finished run: start, commentary, the final answer, the end.
+func museTurn(run, answer string) []string {
+	return []string{
+		museStarted(museT0, run),
+		museDelta(museT0.Add(time.Second), run),
+		museCommitted(museT0.Add(2*time.Second), run, "commentary", "let me look "+museTestSecret),
+		museCommitted(museT1, run, "final_answer", answer),
+		museTerminal(museT1.Add(time.Second), run, "completed"),
+	}
+}
+
+type museFixture struct {
+	t        *testing.T
+	home     string
+	data     string
+	pids     []int
+	procErr  error
+	cwd      string
+	logBuf   bytes.Buffer
+	reader   *MuseReader
+	nowValue time.Time
+}
+
+func newMuseFixture(t *testing.T) *museFixture {
 	t.Helper()
-	f := &museFixture{home: t.TempDir(), session: museSessionID, lines: lines}
-	rt := filepath.Join(f.home, ".local", "share", "muse", "runtime", "muse", "sessions")
-	if err := os.MkdirAll(rt, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	body := fmt.Sprintf(`{"schema_version":1,"session_id":%q,"session_name":null,"endpoint_hint":"x","workspace_label":%q,"target_eligibility":"message_capable","process_generation_hint":"pid=1"}`, museSessionID, workspace)
-	if err := os.WriteFile(filepath.Join(rt, museSessionID+".json"), []byte(body), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if len(lines) > 0 {
-		dir := filepath.Join(f.home, ".local", "share", "muse", "sessions", "2026", "10", "06", museSessionID)
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(dir, "session.jsonl"), []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
+	home := t.TempDir()
+	f := &museFixture{t: t, home: home, data: filepath.Join(home, museDataDirs[0]), pids: []int{museTestPID},
+		cwd: filepath.Join("/work", museTestLabel), nowValue: museT1.Add(5 * time.Second)}
+	processes := func(context.Context, string) ([]int, error) { return f.pids, f.procErr }
+	homeFn := func() (string, error) { return f.home, nil }
+	now := func() time.Time { return f.nowValue }
+	f.reader = newMuseReader(processes, homeFn, now,
+		slog.New(slog.NewJSONHandler(&f.logBuf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	return f
 }
 
-func (f *museFixture) reader() *MuseReader {
-	return newMuseReader(func() (string, error) { return f.home, nil }, func() time.Time { return time.Unix(1_791_000_000, 0) }, nil)
-}
-
-func museAgent(cwd string) domain.Agent {
-	return domain.Agent{Key: domain.Key{PaneID: "p1"}, Kind: "muse", Cwd: cwd}
-}
-
-// museMessage is one assistant_message_committed record line.
-func museMessage(atUS int64, text string) string {
-	return fmt.Sprintf(`{"schema_version":1,"recorded_at":%d,"payload_type":"runtime.session","payload":{"kind":"run","run_id":"r1","event":{"kind":"assistant_message_committed","phase":"commentary","text":%q}}}`, atUS, text)
-}
-
-// museNoise is any other durable-log record with long tool text in it.
-func museNoise(atUS int64) string {
-	return fmt.Sprintf(`{"schema_version":1,"recorded_at":%d,"payload_type":"runtime.session","payload":{"kind":"task","run_id":"r1","event":{"kind":"output","task_id":"t","text":%q}}}`, atUS, strings.Repeat("tool output ", 40))
-}
-
-func TestMuseLastReplyReturnsLastMessage(t *testing.T) {
-	f := newMuseFixture(t, "iucia", []string{
-		museNoise(1_790_999_000_000_000),
-		museMessage(1_790_999_500_000_000, "first step done"),
-		museNoise(1_790_999_900_000_000),
-		museMessage(1_790_999_990_000_000, "the final answer"),
-	})
-	r, err := f.reader().LastReply(context.Background(), museAgent("/home/u/Devel/ccvass/iucia"))
-	if err != nil || r.Text != "the final answer" || r.Source != "muse session log" {
-		t.Fatalf("LastReply = %+v, %v", r, err)
+// runtime writes a runtime session file as Muse Code 1.4.3 does.
+func (f *museFixture) runtime(id string, pid int, label string) string {
+	f.t.Helper()
+	body, err := json.Marshal(map[string]any{"schema_version": 1, "session_id": id, "session_name": nil,
+		"endpoint_hint": "x", "workspace_label": label, "target_eligibility": "message_capable",
+		"process_generation_hint": "pid=" + strconv.Itoa(pid)})
+	if err != nil {
+		f.t.Fatal(err)
 	}
-	if want := time.UnixMicro(1_790_999_990_000_000); !r.Written.Equal(want) {
-		t.Fatalf("Written = %v, want %v", r.Written, want)
+	return f.writeFile(filepath.Join(museRuntimeDir, id+".json"), string(body))
+}
+
+// log writes a session's durable log under the given creation date.
+func (f *museFixture) log(date, id string, lines ...string) string {
+	f.t.Helper()
+	return f.logRaw(date, id, strings.Join(lines, "\n")+"\n")
+}
+
+func (f *museFixture) logRaw(date, id, body string) string {
+	f.t.Helper()
+	return f.writeFile(filepath.Join(museSessionsDir, filepath.FromSlash(date), id, museLogName), body)
+}
+
+func (f *museFixture) writeFile(rel, body string) string {
+	f.t.Helper()
+	path := filepath.Join(f.data, rel)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		f.t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		f.t.Fatal(err)
+	}
+	return path
+}
+
+func (f *museFixture) agent() domain.Agent {
+	return domain.Agent{Key: domain.Key{PaneID: "w1:p1", TerminalID: "term-1"}, Kind: "muse", Cwd: f.cwd}
+}
+
+func (f *museFixture) read() (domain.Reply, error) {
+	return f.reader.LastReply(context.Background(), f.agent())
+}
+
+// assertLogClean fails when a log line carries a session id, the pid, a
+// path or log text.
+func (f *museFixture) assertLogClean() {
+	f.t.Helper()
+	logs := f.logBuf.String()
+	for _, secret := range []string{museTestID, museTestOther, strconv.Itoa(museTestPID), museTestSecret, f.home,
+		"the answer", museTestRun} {
+		if strings.Contains(logs, secret) {
+			f.t.Fatalf("log leaks %q: %s", secret, logs)
+		}
 	}
 }
 
-func TestMuseLastReplyNoReply(t *testing.T) {
-	base := func() *museFixture {
-		return newMuseFixture(t, "iucia", []string{museMessage(1_790_999_990_000_000, "answer")})
+func TestMuseLastReplyReturnsFinalAnswer(t *testing.T) {
+	f := newMuseFixture(t)
+	f.runtime(museTestID, museTestPID, museTestLabel)
+	f.log("2026/10/06", museTestID, append(museTurn("run-old", "an older answer"), museTurn(museTestRun, "the answer\n\n- one")...)...)
+
+	r, err := f.read()
+	if err != nil {
+		t.Fatalf("LastReply: %v", err)
 	}
-	cases := map[string]struct {
-		agent domain.Agent
-		mut   func(*museFixture)
+	if r.Text != "the answer\n\n- one" || r.Source != "muse session log" {
+		t.Fatalf("reply = %q from %q", r.Text, r.Source)
+	}
+	if !r.Meta.Started.Equal(museT0) || !r.Meta.Ended.Equal(museT1) || !r.Written.Equal(museT1) {
+		t.Fatalf("meta = %+v written %v", r.Meta, r.Written)
+	}
+	if r.Age != 5*time.Second {
+		t.Fatalf("age = %v", r.Age)
+	}
+	if !strings.Contains(f.logBuf.String(), `"phase":"final_answer"`) {
+		t.Fatalf("phase not logged: %s", f.logBuf.String())
+	}
+	f.assertLogClean()
+}
+
+func TestMuseLastReplyPhaseAbsentIsFinal(t *testing.T) {
+	f := newMuseFixture(t)
+	f.runtime(museTestID, museTestPID, museTestLabel)
+	f.log("2026/10/06", museTestID,
+		museStarted(museT0, museTestRun),
+		museCommitted(museT0.Add(time.Second), museTestRun, "commentary", "thinking "+museTestSecret),
+		museCommitted(museT1, museTestRun, "", "the answer"),
+		museTerminal(museT1, museTestRun, "completed"))
+
+	r, err := f.read()
+	if err != nil || r.Text != "the answer" {
+		t.Fatalf("reply = %q, %v", r.Text, err)
+	}
+	if !strings.Contains(f.logBuf.String(), `"phase":"none"`) {
+		t.Fatalf("phase class not logged: %s", f.logBuf.String())
+	}
+	f.assertLogClean()
+}
+
+func TestMuseLastReplyOutcomes(t *testing.T) {
+	cases := []struct {
+		name    string
+		lines   []string
+		raw     string
+		pending bool
 	}{
-		"unsupported kind":             {agent: domain.Agent{Key: domain.Key{PaneID: "p1"}, Kind: "claude", Cwd: "/u/iucia"}},
-		"no working directory":         {agent: museAgent("")},
-		"no session for the directory": {agent: museAgent("/u/other"), mut: func(f *museFixture) {}},
-		"no log lines":                 {agent: museAgent("/u/iucia"), mut: func(f *museFixture) {}},
-		"no assistant message":         {agent: museAgent("/u/iucia"), mut: func(f *museFixture) {}},
+		{name: "commentary only", lines: []string{
+			museStarted(museT0, museTestRun),
+			museCommitted(museT1, museTestRun, "commentary", "just thinking "+museTestSecret),
+			museTerminal(museT1, museTestRun, "completed"),
+		}},
+		{name: "newer run started", pending: true, lines: append(museTurn("run-old", "old answer"),
+			museStarted(museT1.Add(time.Minute), museTestRun))},
+		{name: "committed without terminal", pending: true, lines: []string{
+			museStarted(museT0, museTestRun),
+			museCommitted(museT1, museTestRun, "final_answer", "early "+museTestSecret),
+		}},
+		{name: "failed", lines: []string{
+			museStarted(museT0, museTestRun),
+			museCommitted(museT1, museTestRun, "final_answer", "partial "+museTestSecret),
+			museTerminal(museT1, museTestRun, "failed"),
+		}},
+		{name: "cancelled", lines: []string{
+			museStarted(museT0, museTestRun),
+			museTerminal(museT1, museTestRun, "cancelled"),
+		}},
+		{name: "unknown terminal", lines: []string{
+			museStarted(museT0, museTestRun),
+			museTerminal(museT1, museTestRun, "exploded-"+museTestSecret),
+		}},
+		{name: "mid record", pending: true, raw: strings.Join(museTurn(museTestRun, "the answer"), "\n") + "\n" + `{"recorded_at":1`},
+		{name: "no run at all", lines: []string{`{"payload":{"kind":"session"}}`}},
 	}
-	for name, tc := range cases {
-		t.Run(name, func(t *testing.T) {
-			f := base()
-			if tc.mut != nil {
-				tc.mut(f)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newMuseFixture(t)
+			f.runtime(museTestID, museTestPID, museTestLabel)
+			if tc.raw != "" {
+				f.logRaw("2026/10/06", museTestID, tc.raw)
+			} else {
+				f.log("2026/10/06", museTestID, tc.lines...)
 			}
-			switch name {
-			case "no log lines":
-				_ = os.RemoveAll(filepath.Join(f.home, ".local", "share", "muse", "sessions"))
-			case "no assistant message":
-				mdir := filepath.Join(f.home, ".local", "share", "muse", "sessions", "2026", "10", "06", museSessionID)
-				if err := os.WriteFile(filepath.Join(mdir, "session.jsonl"), []byte(museNoise(1)+"\n"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			_, err := f.reader().LastReply(context.Background(), tc.agent)
+			_, err := f.read()
 			if !errors.Is(err, domain.ErrNoReply) {
 				t.Fatalf("err = %v, want ErrNoReply", err)
 			}
+			if got := errors.Is(err, domain.ErrReplyPending); got != tc.pending {
+				t.Fatalf("pending = %v, want %v (%v)", got, tc.pending, err)
+			}
+			if strings.Contains(err.Error(), museTestSecret) {
+				t.Fatalf("error leaks text: %v", err)
+			}
+			f.assertLogClean()
 		})
 	}
 }
 
-func TestMuseLastReplyTruncatedTail(t *testing.T) {
-	lines := []string{museMessage(1_790_999_000_000_000, "old answer")}
-	for i := 0; i < 60; i++ {
-		lines = append(lines, museNoise(1_790_999_500_000_000+int64(i)))
+func TestMuseLastReplyIgnoresOtherRuns(t *testing.T) {
+	f := newMuseFixture(t)
+	f.runtime(museTestID, museTestPID, museTestLabel)
+	f.log("2026/10/06", museTestID,
+		museStarted(museT0, museTestRun),
+		museCommitted(museT1, museTestRun, "final_answer", "the answer"),
+		museCommitted(museT1, "run-other", "final_answer", "not this "+museTestSecret),
+		museTerminal(museT1.Add(time.Second), museTestRun, "completed"))
+
+	r, err := f.read()
+	if err != nil || r.Text != "the answer" {
+		t.Fatalf("reply = %q, %v", r.Text, err)
 	}
-	lines = append(lines, museMessage(1_790_999_990_000_000, "newest answer"))
-	f := newMuseFixture(t, "iucia", lines)
-	r := f.reader()
-	r.maxScan = 3_000 // force the scan to start inside a line
-	got, err := r.LastReply(context.Background(), museAgent("/u/iucia"))
-	if err != nil || got.Text != "newest answer" {
-		t.Fatalf("LastReply = %+v, %v", got, err)
+}
+
+func TestMuseLastReplyMatchesThePanePID(t *testing.T) {
+	f := newMuseFixture(t)
+	// Another Muse pane in a directory with the same basename.
+	f.runtime(museTestOther, museTestPID+1, museTestLabel)
+	f.log("2026/10/06", museTestOther, museTurn("run-x", "the other pane's answer "+museTestSecret)...)
+	f.runtime(museTestID, museTestPID, museTestLabel)
+	f.log("2026/10/05", museTestID, museTurn(museTestRun, "the answer")...)
+
+	r, err := f.read()
+	if err != nil || r.Text != "the answer" {
+		t.Fatalf("reply = %q, %v", r.Text, err)
+	}
+	f.assertLogClean()
+}
+
+func TestMuseLastReplyNewestLogAfterNew(t *testing.T) {
+	f := newMuseFixture(t)
+	// /new in the same process: two runtime files with the pane's pid.
+	f.runtime(museTestOther, museTestPID, museTestLabel)
+	old := f.log("2026/10/06", museTestOther, museTurn("run-x", "the old session's answer")...)
+	f.runtime(museTestID, museTestPID, museTestLabel)
+	f.log("2026/10/06", museTestID, museTurn(museTestRun, "the answer")...)
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(old, past, past); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := f.read()
+	if err != nil || r.Text != "the answer" {
+		t.Fatalf("reply = %q, %v", r.Text, err)
+	}
+	if !strings.Contains(f.logBuf.String(), `"chosen_by":"newest_log"`) {
+		t.Fatalf("choice not logged: %s", f.logBuf.String())
+	}
+	f.assertLogClean()
+}
+
+func TestMuseLastReplyNoReply(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(f *museFixture)
+	}{
+		{"wrong label", func(f *museFixture) {
+			f.runtime(museTestID, museTestPID, "web")
+		}},
+		{"no pids", func(f *museFixture) {
+			f.runtime(museTestID, museTestPID, museTestLabel)
+			f.pids = nil
+		}},
+		{"process lookup fails", func(f *museFixture) {
+			f.runtime(museTestID, museTestPID, museTestLabel)
+			f.procErr = errors.New("unknown method " + museTestSecret)
+		}},
+		{"no cwd", func(f *museFixture) {
+			f.runtime(museTestID, museTestPID, museTestLabel)
+			f.cwd = ""
+		}},
+		{"runtime name differs from session id", func(f *museFixture) {
+			f.writeFile(filepath.Join(museRuntimeDir, museTestOther+".json"),
+				`{"session_id":"`+museTestID+`","workspace_label":"api","process_generation_hint":"pid=48213"}`)
+		}},
+		{"session id is not a uuid", func(f *museFixture) {
+			f.writeFile(filepath.Join(museRuntimeDir, "..evil.json"),
+				`{"session_id":"..evil","workspace_label":"api","process_generation_hint":"pid=48213"}`)
+		}},
+		{"oversized runtime file", func(f *museFixture) {
+			f.writeFile(filepath.Join(museRuntimeDir, museTestID+".json"),
+				`{"session_id":"`+museTestID+`","workspace_label":"api","process_generation_hint":"pid=48213","pad":"`+
+					strings.Repeat("x", museRuntimeMax)+`"}`)
+		}},
+		{"hint without pid", func(f *museFixture) {
+			f.writeFile(filepath.Join(museRuntimeDir, museTestID+".json"),
+				`{"session_id":"`+museTestID+`","workspace_label":"api","process_generation_hint":"generation=3"}`)
+		}},
+		{"no log", func(f *museFixture) {
+			f.runtime(museTestID, museTestPID, museTestLabel)
+			f.log("2026/10/06", museTestOther, museTurn(museTestRun, "the answer")...)
+		}},
+		{"no data directory", func(f *museFixture) {}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newMuseFixture(t)
+			tc.setup(f)
+			if tc.name != "no log" {
+				f.log("2026/10/06", museTestID, museTurn(museTestRun, "the answer")...)
+			}
+			if tc.name == "no data directory" {
+				if err := os.RemoveAll(filepath.Join(f.data, "runtime")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err := f.read()
+			if !errors.Is(err, domain.ErrNoReply) || errors.Is(err, domain.ErrReplyPending) {
+				t.Fatalf("err = %v, want plain ErrNoReply", err)
+			}
+			if strings.Contains(err.Error(), museTestSecret) || strings.Contains(err.Error(), f.home) {
+				t.Fatalf("error leaks: %v", err)
+			}
+			f.assertLogClean()
+		})
+	}
+}
+
+func TestMuseLastReplyRefusesLinkedLog(t *testing.T) {
+	f := newMuseFixture(t)
+	f.runtime(museTestID, museTestPID, museTestLabel)
+	target := filepath.Join(f.home, "elsewhere.jsonl")
+	if err := os.WriteFile(target, []byte(strings.Join(museTurn(museTestRun, "the answer"), "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(f.data, museSessionsDir, "2026", "10", "06", museTestID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(dir, museLogName)); err != nil {
+		t.Skipf("symlink: %v", err)
+	}
+	if _, err := f.read(); !errors.Is(err, domain.ErrNoReply) {
+		t.Fatalf("err = %v, want ErrNoReply", err)
+	}
+}
+
+func TestMuseLastReplyWalkLimit(t *testing.T) {
+	f := newMuseFixture(t)
+	f.runtime(museTestID, museTestPID, museTestLabel)
+	f.log("2026/01/01", museTestID, museTurn(museTestRun, "the answer")...)
+	for day := 2; day <= 20; day++ {
+		if err := os.MkdirAll(filepath.Join(f.data, museSessionsDir, "2026", "01", strconv.Itoa(10+day)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := museWalkLimit
+	museWalkLimit = 10
+	t.Cleanup(func() { museWalkLimit = old })
+
+	if _, err := f.read(); !errors.Is(err, domain.ErrNoReply) {
+		t.Fatalf("err = %v, want ErrNoReply", err)
+	}
+	museWalkLimit = old
+	if r, err := f.read(); err != nil || r.Text != "the answer" {
+		t.Fatalf("reply = %q, %v", r.Text, err)
+	}
+}
+
+func TestMuseLastReplyCacheFollowsAMovedLog(t *testing.T) {
+	f := newMuseFixture(t)
+	f.runtime(museTestID, museTestPID, museTestLabel)
+	first := f.log("2026/10/06", museTestID, museTurn(museTestRun, "first")...)
+	if r, err := f.read(); err != nil || r.Text != "first" {
+		t.Fatalf("reply = %q, %v", r.Text, err)
+	}
+	if err := os.Remove(first); err != nil {
+		t.Fatal(err)
+	}
+	f.log("2026/10/07", museTestID, museTurn(museTestRun, "the answer")...)
+	// The cached path is gone: the second read walks again.
+	if r, err := f.read(); err != nil || r.Text != "the answer" {
+		t.Fatalf("reply = %q, %v", r.Text, err)
+	}
+	if strings.Contains(f.logBuf.String(), `"cached":true`) {
+		t.Fatalf("a stale cache entry was used: %s", f.logBuf.String())
+	}
+	if r, err := f.read(); err != nil || r.Text != "the answer" {
+		t.Fatalf("reply = %q, %v", r.Text, err)
+	}
+	if !strings.Contains(f.logBuf.String(), `"cached":true`) {
+		t.Fatalf("cache never hit: %s", f.logBuf.String())
+	}
+}
+
+func TestMuseLastReplyFallbackDataDir(t *testing.T) {
+	f := newMuseFixture(t)
+	f.data = filepath.Join(f.home, ".muse")
+	f.runtime(museTestID, museTestPID, museTestLabel)
+	f.log("2026/10/06", museTestID, museTurn(museTestRun, "the answer")...)
+
+	if r, err := f.read(); err != nil || r.Text != "the answer" {
+		t.Fatalf("reply = %q, %v", r.Text, err)
+	}
+}
+
+func TestMuseLastReplyBudget(t *testing.T) {
+	f := newMuseFixture(t)
+	f.runtime(museTestID, museTestPID, museTestLabel)
+	f.reader.maxScan = 1 << 20
+	huge := museLine(museT1, museTestRun, map[string]any{"kind": "tool_output", "text": museTestSecret + strings.Repeat("x", 2<<20)})
+	f.log("2026/10/06", museTestID, append(museTurn("run-old", "old answer"), museStarted(museT1, museTestRun), huge)...)
+
+	_, err := f.read()
+	if !errors.Is(err, domain.ErrNoReply) || errors.Is(err, domain.ErrReplyPending) {
+		t.Fatalf("err = %v, want a plain budget miss", err)
+	}
+	f.assertLogClean()
+}
+
+func TestMuseLastReplyOtherKindAndCancel(t *testing.T) {
+	f := newMuseFixture(t)
+	agent := f.agent()
+	agent.Kind = "codex"
+	if _, err := f.reader.LastReply(context.Background(), agent); !errors.Is(err, domain.ErrNoReply) ||
+		!strings.Contains(err.Error(), "unsupported agent") {
+		t.Fatalf("err = %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := f.reader.LastReply(ctx, f.agent()); !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
 	}
 }

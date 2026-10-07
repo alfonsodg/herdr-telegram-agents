@@ -18,9 +18,9 @@ func dirID(ms int64) string {
 	return fmt.Sprintf("%08x-%04x-7aaa-8aaa-aaaaaaaaaaaa", ms>>16, ms&0xffff)
 }
 
-// writeRollout writes a miniature rollout for id under its day directory
+// writeCodexDirRollout writes a miniature rollout for id under its day directory
 // and returns the file path.
-func writeRollout(t *testing.T, home, id, cwd string, ts0, ts1 int64, answer string) string {
+func writeCodexDirRollout(t *testing.T, home, id, cwd string, ts0, ts1 int64, answer string) string {
 	t.Helper()
 	ms, ok := codexV7Millis(id)
 	if !ok {
@@ -70,11 +70,11 @@ func TestCodexDirectoryFallbackPrefersFresher(t *testing.T) {
 	session := func(context.Context, string) (domain.SessionTuple, error) { return tuple, nil }
 	r, home := dirReader(t, session)
 	cwd := "/u/proj"
-	old := writeRollout(t, home, tuple.Value, cwd, codexT0, codexT1, "old answer")
+	old := writeCodexDirRollout(t, home, tuple.Value, cwd, codexT0, codexT1, "old answer")
 	// The pane's stale session still has an older answer; the conversation
 	// actually in use writes a newer rollout for the same directory.
 	freshID := dirID(time.Unix(codexT1+100, 0).UnixMilli())
-	writeRollout(t, home, freshID, cwd, codexT1+100, codexT1+110, "fresh answer")
+	writeCodexDirRollout(t, home, freshID, cwd, codexT1+100, codexT1+110, "fresh answer")
 	past := time.Unix(codexT0-1000, 0)
 	if err := os.Chtimes(old, past, past); err != nil {
 		t.Fatal(err)
@@ -90,9 +90,9 @@ func TestCodexDirectoryFallbackKeepsFreshExact(t *testing.T) {
 	session := func(context.Context, string) (domain.SessionTuple, error) { return tuple, nil }
 	r, home := dirReader(t, session)
 	cwd := "/u/proj"
-	writeRollout(t, home, tuple.Value, cwd, codexT1-10, codexT1, "the exact answer")
+	writeCodexDirRollout(t, home, tuple.Value, cwd, codexT1-10, codexT1, "the exact answer")
 	freshID := dirID(time.Unix(codexT1-50, 0).UnixMilli())
-	writeRollout(t, home, freshID, cwd, codexT0, codexT1-100, "an older answer")
+	writeCodexDirRollout(t, home, freshID, cwd, codexT0, codexT1-100, "an older answer")
 	got, err := r.LastReply(context.Background(), dirAgent(cwd))
 	if err != nil || got.Text != "the exact answer" || got.Source != "codex rollout" {
 		t.Fatalf("LastReply = %+v, %v", got, err)
@@ -106,7 +106,7 @@ func TestCodexDirectoryFallbackWithoutSession(t *testing.T) {
 	r, home := dirReader(t, session)
 	cwd := "/u/proj"
 	id := dirID(time.Unix(codexT1-50, 0).UnixMilli())
-	writeRollout(t, home, id, cwd, codexT1-40, codexT1-30, "the directory answer")
+	writeCodexDirRollout(t, home, id, cwd, codexT1-40, codexT1-30, "the directory answer")
 	got, err := r.LastReply(context.Background(), dirAgent(cwd))
 	if err != nil || got.Text != "the directory answer" || got.Source != "codex rollout (directory)" {
 		t.Fatalf("LastReply = %+v, %v", got, err)
@@ -119,7 +119,7 @@ func TestCodexDirectoryFallbackIgnoresOtherDirectories(t *testing.T) {
 	}
 	r, home := dirReader(t, session)
 	id := dirID(time.Unix(codexT1-50, 0).UnixMilli())
-	writeRollout(t, home, id, "/u/other", codexT1-40, codexT1-30, "another pane's answer")
+	writeCodexDirRollout(t, home, id, "/u/other", codexT1-40, codexT1-30, "another pane's answer")
 	if _, err := r.LastReply(context.Background(), dirAgent("/u/proj")); err == nil {
 		t.Fatal("expected no reply for a directory with no rollout")
 	}

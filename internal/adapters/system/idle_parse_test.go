@@ -34,24 +34,47 @@ func TestParseHIDIdleTime(t *testing.T) {
 	}
 }
 
-func TestParseIdleMillis(t *testing.T) {
+func TestParseMutterIdletime(t *testing.T) {
 	cases := []struct {
 		name string
 		in   string
 		want time.Duration
-		ok   bool
+		err  error
 	}{
-		{"dbus uint64", "method return time=1759760000.1 sender=:1.5 -> destination=:1.9 serial=5 reply_serial=2\n   uint64 1234\n", 1234 * time.Millisecond, true},
-		{"dbus uint32 zero", "method return time=1 sender=:1.5 -> destination=:1.9 serial=5 reply_serial=2\n   uint32 0\n", 0, true},
-		{"xprintidle", "12345\n", 12345 * time.Millisecond, true},
-		{"empty", "", 0, false},
-		{"error text", "Error org.freedesktop.DBus.Error.NotSupported: nope\n", 0, false},
-		{"garbage tail", "uint64 nope\n", 0, false},
+		{"gdbus reply", "(uint64 1234,)\n", 1234 * time.Millisecond, nil},
+		{"zero", "(uint64 0,)", 0, nil},
+		{"hours", "(uint64 7200000,)", 2 * time.Hour, nil},
+		{"wrong type", "(uint32 5,)", 0, errNoMutterIdletime},
+		{"error text", "Error: GDBus.Error:org.freedesktop.DBus.Error.ServiceUnknown", 0, errNoMutterIdletime},
+		{"empty", "", 0, errNoMutterIdletime},
+		{"overflow", "(uint64 18446744073709551615,)", 0, errIdleOverflow},
 	}
 	for _, tc := range cases {
-		got, ok := parseIdleMillis([]byte(tc.in))
-		if ok != tc.ok || got != tc.want {
-			t.Errorf("%s: parseIdleMillis = %v, %v; want %v, %v", tc.name, got, ok, tc.want, tc.ok)
+		got, err := parseMutterIdletime([]byte(tc.in))
+		if !errors.Is(err, tc.err) || got != tc.want {
+			t.Errorf("%s: parseMutterIdletime = %v, %v; want %v, %v", tc.name, got, err, tc.want, tc.err)
+		}
+	}
+}
+
+func TestParseXprintidle(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want time.Duration
+		err  error
+	}{
+		{"with newline", "4567\n", 4567 * time.Millisecond, nil},
+		{"zero", "0", 0, nil},
+		{"negative", "-1", 0, errNoXprintidle},
+		{"display error", "couldn't open display", 0, errNoXprintidle},
+		{"empty", "", 0, errNoXprintidle},
+		{"overflow", "9223372036854775807", 0, errIdleOverflow},
+	}
+	for _, tc := range cases {
+		got, err := parseXprintidle([]byte(tc.in))
+		if !errors.Is(err, tc.err) || got != tc.want {
+			t.Errorf("%s: parseXprintidle = %v, %v; want %v, %v", tc.name, got, err, tc.want, tc.err)
 		}
 	}
 }

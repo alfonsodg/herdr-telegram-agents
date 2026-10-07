@@ -36,11 +36,16 @@ const (
 // the pager, the signature check. /git runs in whatever directory the agent
 // works in, which may be a repository nobody on this machine wrote. Filter
 // drivers have no global switch; gitFilterConfig adds them per name.
+// diff.submodule=short keeps a moved submodule a "Subproject commit" line:
+// "diff" (which the repository's config may set) runs a child git diff
+// inside the submodule, under the submodule's own config and without the
+// --no-ext-diff and --no-textconv this run passes.
 var gitSafeConfig = []string{
 	"-c", "color.ui=never",
 	"-c", "core.fsmonitor=false",
 	"-c", "core.hooksPath=" + os.DevNull,
 	"-c", "core.pager=cat",
+	"-c", "diff.submodule=short",
 	"-c", "log.showSignature=false",
 }
 

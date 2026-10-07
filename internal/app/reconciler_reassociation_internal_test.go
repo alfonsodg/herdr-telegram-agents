@@ -187,7 +187,7 @@ func TestSameSessionRestartKeepsBridgeAndDashboardState(t *testing.T) {
 		t.Fatal("dashboard status duration did not follow the retained topic")
 	}
 	dash.mu.Unlock()
-	body := dash.view().render()
+	body := dash.view(context.Background()).render()
 	if !strings.Contains(body, "/101") {
 		t.Fatalf("dashboard link did not retain thread 101: %s", body)
 	}

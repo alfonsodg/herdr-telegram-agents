@@ -56,6 +56,9 @@ const (
 	// OptionSyncDashboard keeps one pinned message in General that lists
 	// every live agent with its status, edited in place and never ringing.
 	OptionSyncDashboard = "sync.dashboard"
+	// OptionSyncQuota adds the Claude and Codex usage windows under the
+	// dashboard and /status.
+	OptionSyncQuota = "sync.quota"
 	// OptionRedact switches the secret redaction of every post on or off.
 	OptionRedact = "privacy.redact"
 	// OptionDeleteAfterDays is how long a closed topic of an exited agent
@@ -222,11 +225,23 @@ func buildOptionSpecs() []OptionSpec {
 			Kind:        KindBool,
 			Default:     "true",
 		},
+		// On by default: the quota lines only change the text of messages
+		// that are edited in place, which never ring, and a provider with
+		// no data shows nothing, so a fresh install looks the same until a
+		// source has data (decided 2026-10-07).
+		{
+			Key:         OptionSyncQuota,
+			Group:       GroupSync,
+			Title:       "Quota in the dashboard",
+			Description: "Claude and Codex usage windows under the dashboard and /status. Codex is read from its session files; Claude needs the status line tap shown by doctor.",
+			Kind:        KindBool,
+			Default:     "true",
+		},
 		{
 			Key:         OptionQuietEnabled,
 			Group:       GroupQuiet,
 			Title:       "Quiet while at the desk",
-			Description: "While you are at this machine, topic edits wait and screen posts follow the Screen posts choice; everything catches up when you leave. Automatic on macOS and Windows; on Linux it asks Mutter, the freedesktop ScreenSaver or xprintidle, and where none answers quiet starts at the desk: /away releases it and /here brings it back.",
+			Description: "While you are typing on this machine, topic edits wait and screen posts are silent; everything catches up when you leave. macOS, Windows, and Linux under GNOME or X11 (xprintidle).",
 			Kind:        KindBool,
 			Default:     "false",
 		},
@@ -283,7 +298,7 @@ func buildOptionSpecs() []OptionSpec {
 			Key:         OptionPostsMeta,
 			Group:       GroupPosts,
 			Title:       "Turn summary line",
-			Description: "End every done post with one line from the agent's transcript: how long the turn took, the model, how many files it edited and how many tokens it wrote. Claude Code, Codex and OpenCode only; without a transcript the post ends as before.",
+			Description: "End every done post with one line from the agent's transcript: how long the turn took, the model, how many files it edited and how many tokens it wrote. Claude Code, Codex, OpenCode, Antigravity, Pi and Muse only; without a transcript the post ends as before.",
 			Kind:        KindBool,
 			Default:     "true",
 		},
@@ -895,6 +910,10 @@ func (o Options) SyncEnabled() bool { return o.Bool(OptionSyncEnabled) }
 // DashboardEnabled reports whether the pinned status message in General
 // is kept.
 func (o Options) DashboardEnabled() bool { return o.Bool(OptionSyncDashboard) }
+
+// QuotaEnabled reports whether the dashboard and /status show the usage
+// windows of Claude and Codex.
+func (o Options) QuotaEnabled() bool { return o.Bool(OptionSyncQuota) }
 
 // PagerEnabled reports whether questions ring from the bot's private chat
 // instead of the topic post.

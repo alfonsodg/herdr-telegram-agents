@@ -51,8 +51,7 @@ Go toolchain on the machine where it is installed.
 Write in an agent's topic to prompt it. A short reply such as `y`, `n`, `1`,
 `enter`, or `esc` answers a blocked agent; numbered questions also have
 buttons. `/screen` shows the screen, or the last readable reply for idle or
-done OpenCode, Codex, Muse and Antigravity agents. `/keys` sends raw keys, and
-`/git` shows
+done OpenCode, Codex, Antigravity, Pi and Muse agents. `/keys` sends raw keys, and `/git` shows
 allow-listed repository information. Photos, documents, voice notes, audio,
 and video sent to a topic are saved in the plugin inbox and passed to the
 agent as file paths.
@@ -66,7 +65,9 @@ terminal.
 In General, `/status` shows all agents, `/new` starts one, and `/options`
 opens the settings panel. The panel controls syncing, notification behavior,
 icons, redaction, and cleanup. The pinned dashboard shows the same agent
-statuses. Operators can add read-only observers with `/observers`.
+statuses, plus the Codex usage windows and, once the status line tap from
+`doctor` is installed, Claude's 5-hour and weekly quota. Operators can add
+read-only observers with `/observers`.
 
 See [Commands](docs/commands.md) for every command and attachment rule, and
 [Behavior](docs/behaviour.md) for sync, settings, access, and daemon details.

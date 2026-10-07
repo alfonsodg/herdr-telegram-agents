@@ -291,12 +291,9 @@ func (s *NDJSONServer) serve(c *connState) {
 			return
 		}
 		if req.Method == "events.subscribe" {
-			if err := s.reply(c, responseLine{ID: req.ID, Result: map[string]string{"type": "subscription_started"}}); err != nil {
+			if err := s.startSubscription(c, req.ID); err != nil {
 				return
 			}
-			s.mu.Lock()
-			c.subscribed = true
-			s.mu.Unlock()
 			continue
 		}
 		var resp responseLine
@@ -327,6 +324,24 @@ func (s *NDJSONServer) reply(c *connState, resp responseLine) error {
 		s.tb.Fatalf("testkit: marshal response: %v", err)
 	}
 	return s.writeLine(c, line)
+}
+
+// startSubscription marks c subscribed and answers subscription_started
+// under the connection's write lock: a client that has read the answer
+// already counts in SubscriptionCount, and a concurrent Push reaches the
+// connection only after the answer, as with Herdr.
+func (s *NDJSONServer) startSubscription(c *connState, id string) error {
+	line, err := json.Marshal(responseLine{ID: id, Result: map[string]string{"type": "subscription_started"}})
+	if err != nil {
+		s.tb.Fatalf("testkit: marshal response: %v", err)
+	}
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	s.mu.Lock()
+	c.subscribed = true
+	s.mu.Unlock()
+	_, err = c.conn.Write(append(line, '\n'))
+	return err
 }
 
 func (s *NDJSONServer) writeLine(c *connState, line []byte) error {

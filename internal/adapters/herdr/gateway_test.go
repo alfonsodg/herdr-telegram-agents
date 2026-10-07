@@ -171,6 +171,44 @@ func TestGatewayAgentSession(t *testing.T) {
 	}
 }
 
+func TestGatewayPaneProcesses(t *testing.T) {
+	s := testkit.NewNDJSONServer(t, nil)
+	s.Handle("pane.process_info", func(id string, params json.RawMessage) (any, *testkit.APIError) {
+		var p struct {
+			PaneID string `json:"pane_id"`
+		}
+		_ = json.Unmarshal(params, &p)
+		switch p.PaneID {
+		case "w1:p1":
+			return json.RawMessage(`{"type":"pane_process_info","process_info":{"pane_id":"w1:p1","shell_pid":10,
+				"foreground_process_group_id":42,"foreground_processes":[
+				{"pid":42,"name":"muse","argv":["muse","--secret"],"cmdline":"muse --secret"},
+				{"pid":43,"name":"caffeinate"},{"pid":42,"name":"muse"},{"pid":0,"name":"odd"}]}}`), nil
+		case "w1:p2":
+			return json.RawMessage(`{"type":"pane_process_info","process_info":{"pane_id":"w1:p2","foreground_processes":[]}}`), nil
+		}
+		return nil, &testkit.APIError{Code: "unknown_method", Message: "no such method"}
+	})
+	g := newGateway(t, s)
+
+	got, err := g.PaneProcesses(ctxT(t), "w1:p1")
+	if err != nil {
+		t.Fatalf("PaneProcesses: %v", err)
+	}
+	if want := []int{42, 43}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("pids = %v, want %v", got, want)
+	}
+	if params := lastParams(t, s, "pane.process_info"); !reflect.DeepEqual(params, map[string]any{"pane_id": "w1:p1"}) {
+		t.Fatalf("params = %v", params)
+	}
+	if got, err := g.PaneProcesses(ctxT(t), "w1:p2"); err != nil || len(got) != 0 {
+		t.Fatalf("empty pane = %v, %v; want no pids and no error", got, err)
+	}
+	if _, err := g.PaneProcesses(ctxT(t), "w1:p3"); err == nil {
+		t.Fatal("an error response must be returned")
+	}
+}
+
 func TestGatewayListAgentsPreservesSessionDigest(t *testing.T) {
 	s := testkit.NewNDJSONServer(t, nil)
 	s.Handle("agent.list", func(id string, params json.RawMessage) (any, *testkit.APIError) {

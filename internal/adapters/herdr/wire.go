@@ -141,6 +141,22 @@ type paneReadResult struct {
 	} `json:"read"`
 }
 
+// paneProcessInfoResult is the `pane_process_info` result of
+// pane.process_info (protocol 22). Only the pids are decoded: argv and
+// cmdline may carry secrets and are never needed.
+type paneProcessInfoResult struct {
+	ProcessInfo struct {
+		ForegroundProcesses []struct {
+			PID int `json:"pid"`
+		} `json:"foreground_processes"`
+	} `json:"process_info"`
+}
+
+// paneParams addresses one pane by id.
+type paneParams struct {
+	PaneID string `json:"pane_id"`
+}
+
 // Request params for the agent and notification methods.
 type readParams struct {
 	Target    string `json:"target"`

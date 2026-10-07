@@ -81,17 +81,10 @@ func TestMultiReplySourceStopsOnFailure(t *testing.T) {
 	}
 }
 
-// TestMultiReplySourceStopsOnPending: a pending reply means "the turn is
-// not over yet", not "this source cannot answer", so later sources must
-// not overwrite it with their own ErrNoReply.
-func TestMultiReplySourceStopsOnPending(t *testing.T) {
-	first := &stubReplySource{err: fmt.Errorf("%w: the turn is still running", domain.ErrReplyPending)}
-	second := &stubReplySource{err: domain.ErrNoReply}
-	_, err := (domain.MultiReplySource{first, second}).LastReply(context.Background(), domain.Agent{})
-	if !errors.Is(err, domain.ErrReplyPending) || second.called {
-		t.Fatalf("err = %v, second called = %v", err, second.called)
-	}
-}
+// TestMultiReplySourceStopsOnPending was dropped in the v0.16.0 sync: the
+// upstream chain keeps scanning after a pending source (a later source may
+// still answer) and lets pending win at the end; TestMultiReplySourcePendingWins
+// covers that.
 
 // TestMultiReplySourcePrefersTheRealFailure: when one source understands
 // the kind and fails while the rest reject the kind, the caller sees the
@@ -128,5 +121,42 @@ func TestMultiReplySourceEmpty(t *testing.T) {
 	_, err := m.LastReply(context.Background(), domain.Agent{})
 	if !errors.Is(err, domain.ErrNoReply) {
 		t.Fatalf("err = %v, want ErrNoReply", err)
+	}
+}
+
+// TestMultiReplySourcePendingWins: the reader that owns the agent's kind
+// says the turn is still running; another reader's plain ErrNoReply
+// ("unsupported agent") must not hide that, before or after it.
+func TestMultiReplySourcePendingWins(t *testing.T) {
+	pending := fmt.Errorf("%w: the turn is still running", domain.ErrReplyPending)
+	plain := fmt.Errorf("%w: unsupported agent", domain.ErrNoReply)
+	for name, sources := range map[string]domain.MultiReplySource{
+		"pending first": {&stubReplySource{err: pending}, &stubReplySource{err: plain}},
+		"pending last":  {&stubReplySource{err: plain}, &stubReplySource{err: pending}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := sources.LastReply(context.Background(), domain.Agent{})
+			if !errors.Is(err, domain.ErrReplyPending) {
+				t.Fatalf("err = %v, want ErrReplyPending", err)
+			}
+		})
+	}
+}
+
+// TestMultiReplySourceSuccessBeatsPending: a reply from a later source
+// still wins over an earlier pending answer.
+func TestMultiReplySourceSuccessBeatsPending(t *testing.T) {
+	m := domain.MultiReplySource{&stubReplySource{err: domain.ErrReplyPending}, &stubReplySource{reply: domain.Reply{Text: "done"}}}
+	r, err := m.LastReply(context.Background(), domain.Agent{})
+	if err != nil || r.Text != "done" {
+		t.Fatalf("LastReply = %q, %v", r.Text, err)
+	}
+}
+
+// TestErrReplyPendingIsNoReply: callers that only know ErrNoReply keep
+// falling back to the screen.
+func TestErrReplyPendingIsNoReply(t *testing.T) {
+	if !errors.Is(domain.ErrReplyPending, domain.ErrNoReply) {
+		t.Fatal("ErrReplyPending must wrap ErrNoReply")
 	}
 }

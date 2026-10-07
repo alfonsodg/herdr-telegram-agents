@@ -18,14 +18,14 @@ import (
 
 // helpText is the command list shown by /help in a topic and in General.
 const helpText = `Commands
-/screen [N|all]: for idle or done OpenCode or Codex, post its last reply when available (up to 5 messages); otherwise the visible screen; with N the screen's last N lines, with "all" everything since your last message
+/screen [N|all]: for idle or done OpenCode, Codex, Antigravity, Pi or Muse, post its last reply when available (up to 5 messages); otherwise the visible screen; with N the screen's last N lines, with "all" everything since your last message
 /keys k1 k2 ...: send raw keys to the agent (esc, enter, y, 1 ...)
 /focus: bring the agent's pane to the front in Herdr
 /git status | diff [staged] | log [N]: git in the agent's directory; long output arrives as a file
 /stop: send esc to the agent (soft cancel of the running turn or dialog)
 /interrupt: send ctrl+c to the agent (hard interrupt)
 /close: close the agent's pane after a Yes/No confirmation
-/clear, /compact [instructions], /usage, /model [name], /models: typed into the agent as its own command while it is idle; the screen after the command is posted as a reply, /usage and a bare /model are closed with esc for Claude Code only
+/clear, /compact [instructions], /usage, /model [name], /models: typed into the agent as its own command while it is idle (/models is OpenCode's model picker); the screen after it is posted as a reply. On Claude Code /usage and a bare /model are closed with esc for you; other agents keep their picker open (choose with /keys, close with /stop) and your next plain message is held back once
 /status: this agent's status; in General, every agent with a link to its topic
 /away [2h]: treat you as away until /here or for the given time, so Telegram gets everything (General only)
 /here: back to automatic presence (General only)
@@ -43,6 +43,15 @@ const (
 	// stoppedReply and interruptedReply confirm the key went out.
 	stoppedReply     = "⏹ sent esc"
 	interruptedReply = "⛔ sent ctrl+c"
+	// pickerHint ends the screen post of an overlay command on an agent
+	// that keeps its picker open (every kind but Claude Code).
+	pickerHint = "picker left open: /keys up, down, enter to choose, /stop to close"
+	// pickerRefusedFmt answers the plain message held back by a kept
+	// picker; %s is the command that opened it.
+	// forwardWrongKindFmt answers a forwarded command that only another
+	// agent kind has (today /models, OpenCode's model picker).
+	forwardWrongKindFmt = "⚠️ /%s is OpenCode's model picker; this agent is not OpenCode, use /model"
+	pickerRefusedFmt    = "⚠️ the %s picker may still be open, so this was not sent: choose with /keys up, down, enter or close it with /stop, then send it again"
 	// topicOnly answers an agent command written in General.
 	topicOnly = "agent commands live in the agent's topic"
 	// closePrefix marks the callback data of the /close keyboard; closeYes
@@ -82,14 +91,14 @@ const (
 	// presenceAwayUntil and presenceAwayOpen answer /away.
 	presenceAwayUntil = "🏃 away until %s, Telegram gets everything; /here returns to automatic"
 	presenceAwayOpen  = "🏃 away until /here, Telegram gets everything"
-	// presenceHereManual answers /here where the platform has no idle
+	// presenceHereManual answers /here where the machine has no idle
 	// source: quiet turned on by hand.
-	presenceHereManual = "🖥 quiet on until /away (no automatic idle source here)"
+	presenceHereManual = "🖥 quiet on until /away (no input idle source on this machine)"
 	// presenceHereFmt answers /here with the automatic verdict.
 	presenceHereFmt     = "🖥 presence is automatic again: %s"
 	presenceVerdictDesk = "at the desk, quiet on"
 	presenceVerdictAway = "away"
-	presenceVerdictNone = "not available on this platform"
+	presenceVerdictNone = "no input idle source on this machine"
 	// Headers of the General /status summary.
 	presenceHeaderQuiet  = "🔕 quiet: you are at the desk (/away to override)\n"
 	presenceHeaderManual = "🏃 away (manual) until %s\n"
@@ -113,6 +122,8 @@ type inbound struct {
 	// since supplies when each agent entered its status for the /status
 	// durations (the dashboard's record); nil shows no durations.
 	since func() map[domain.Key]time.Time
+	// quota renders the usage lines under /status; nil shows none.
+	quota *Quota
 	panel *panel
 	// cfg is the config in force: the chat, the bot's username and the
 	// operator and observer lists; /observers updates it and saves it
@@ -132,6 +143,10 @@ type inbound struct {
 	// to do when it fires. Both are touched on the bridge goroutine only.
 	deb     *debouncer
 	pending map[domain.Key]followUp
+	// pickers are the pickers a forwarded command left open on a
+	// non-Claude agent; the next plain message is held back once. Bridge
+	// goroutine only.
+	pickers map[domain.Key]heldPicker
 	// git runs /git in the agent's directory; inbox keeps attachments.
 	// Either may be nil, which refuses the feature with a notice.
 	git   domain.GitRunner
@@ -157,6 +172,14 @@ type followUp struct {
 	messageID int
 }
 
+// heldPicker is a picker kept open by a forwarded command: the word that
+// opened it, the agent status when the screen was read, and when.
+type heldPicker struct {
+	word   string
+	status domain.Status
+	since  time.Time
+}
+
 func newInbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, topics *topicView, agents agentLookup,
 	live func() []domain.Agent, out *outbound, opts *Options, svc Services,
 	cfg domain.Config, clock domain.Clock, log *slog.Logger) *inbound {
@@ -175,6 +198,7 @@ func newInbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, topics *to
 		clock:   clock,
 		deb:     newDebouncer(clock, commandSettle, log),
 		pending: map[domain.Key]followUp{},
+		pickers: map[domain.Key]heldPicker{},
 		closing: map[domain.Key]int{},
 		albums:  map[string]*album{},
 	}
@@ -253,12 +277,18 @@ func (i *inbound) HandleTopic(ctx context.Context, msg domain.TopicMessage) erro
 	i.log.Debug("topic command text", slog.String("key", key.String()), slog.String("text", msg.Text), slog.Any("keys", cmd.Keys), slog.Int("lines", cmd.Lines))
 	switch cmd.Kind {
 	case domain.CmdPrompt:
+		if word, held := i.holdForPicker(key, agent); held {
+			i.log.Info("prompt held back for open picker", slog.String("key", key.String()), slog.String("word", word),
+				slog.Int("thread_id", msg.ThreadID), slog.Int("message_id", msg.MessageID), slog.Int("len", len(msg.Text)))
+			return i.reply(ctx, msg.ThreadID, msg.MessageID, fmt.Sprintf(pickerRefusedFmt, "/"+word))
+		}
 		if err := i.submitText(ctx, key.PaneID, agent.Status, cmd.Text); err != nil {
 			return i.failed(ctx, msg, key, "prompt", err)
 		}
 		i.log.Debug("herdr call ok", slog.String("method", "prompt"), slog.String("key", key.String()), slog.Int("message_id", msg.MessageID))
 		return i.out.PromptSent(ctx, key, msg.ThreadID, msg.MessageID)
 	case domain.CmdKeys:
+		i.releasePicker(key, "keys")
 		return i.herdrCall(ctx, msg, key, "send_keys", func(ctx context.Context) error {
 			return i.herdr.SendKeys(ctx, key.PaneID, cmd.Keys)
 		})
@@ -269,8 +299,10 @@ func (i *inbound) HandleTopic(ctx context.Context, msg domain.TopicMessage) erro
 	case domain.CmdGit:
 		return i.gitCommand(ctx, msg, key, agent, cmd.Git)
 	case domain.CmdStop:
+		i.releasePicker(key, "stop")
 		return i.control(ctx, msg, key, "stop", domain.KeyEscape, stoppedReply)
 	case domain.CmdInterrupt:
+		i.releasePicker(key, "interrupt")
 		return i.control(ctx, msg, key, "interrupt", domain.KeyInterrupt, interruptedReply)
 	case domain.CmdClose:
 		return i.askClose(ctx, msg, key, agent)
@@ -412,9 +444,11 @@ func (i *inbound) PressClose(ctx context.Context, ev domain.ButtonPressed) error
 	return i.out.stale(ctx, ev, "unknown button")
 }
 
-// Forget drops the per-agent state of an agent that is gone: its /close
-// question needs no edit, the topic is closing anyway.
+// Forget drops the per-agent state of an agent that is gone: its picker
+// hold, and its /close question, which needs no edit since the topic is
+// closing anyway.
 func (i *inbound) Forget(key domain.Key) {
+	i.releasePicker(key, "gone")
 	if id, ok := i.closing[key]; ok {
 		i.log.Debug("close question dropped", slog.String("key", key.String()), slog.Int("message_id", id))
 		delete(i.closing, key)
@@ -434,6 +468,7 @@ func (i *inbound) Reassociate(from, to domain.Key) {
 		i.deb.ScheduleAfter(to, 0)
 	}
 	moveAgentState(i.closing, from, to)
+	moveAgentState(i.pickers, from, to)
 	for _, a := range i.albums {
 		if a.key == from {
 			a.key = to
@@ -447,21 +482,18 @@ func (i *inbound) Reassociate(from, to domain.Key) {
 // working or blocked agent gets a refusal instead: the text would land in
 // a dialog or in Claude's input queue, and the esc that closes an overlay
 // would interrupt it.
-// kindClaude is the agent kind the forwarded-command dismiss targets: the
-// auto-esc exists to close Claude Code overlays.
-const kindClaude = "claude"
-
 func (i *inbound) forward(ctx context.Context, msg domain.TopicMessage, key domain.Key, agent domain.Agent, cmd domain.Command) error {
 	word := forwardWord(cmd.Text)
-	if agent.Kind != kindClaude {
-		// Keep other agents' UI up: codex's /model picker must stay open
-		// for the operator to drive with /keys.
-		cmd.Forward.Dismiss = false
-	}
+	i.releasePicker(key, "forward")
 	if hint, refused := forwardRefusal(agent.Status); refused {
 		i.log.Info("command refused", slog.String("key", key.String()), slog.String("word", word),
 			slog.String("status", string(agent.Status)), slog.Int("message_id", msg.MessageID))
 		return i.reply(ctx, msg.ThreadID, msg.MessageID, "⚠️ "+hint)
+	}
+	if !cmd.Forward.Fits(agent.Kind) {
+		i.log.Info("[FIX] command refused for agent kind", slog.String("key", key.String()), slog.String("word", word),
+			slog.String("kind", agent.Kind), slog.Int("message_id", msg.MessageID))
+		return i.reply(ctx, msg.ThreadID, msg.MessageID, fmt.Sprintf(forwardWrongKindFmt, word))
 	}
 	if err := i.herdr.Prompt(ctx, key.PaneID, cmd.Text); err != nil {
 		return i.failed(ctx, msg, key, "prompt", err)
@@ -479,6 +511,40 @@ func (i *inbound) forward(ctx context.Context, msg domain.TopicMessage, key doma
 	i.deb.Schedule(key)
 	i.log.Debug("command follow-up scheduled", slog.String("key", key.String()), slog.String("word", word), slog.Int64("delay_ms", i.deb.delay.Milliseconds()))
 	return nil
+}
+
+// holdForPicker decides whether a plain message must be held back
+// because a forwarded command left a picker open on this agent. The hold
+// is one-shot: the bridge cannot see whether the picker was closed at the
+// desk, so the refusal releases it and a resend goes through. A hold whose
+// agent status moved on, or older than pickerHold, is released without a
+// refusal.
+func (i *inbound) holdForPicker(key domain.Key, agent domain.Agent) (string, bool) {
+	h, ok := i.pickers[key]
+	if !ok {
+		return "", false
+	}
+	switch {
+	case agent.Status != h.status:
+		i.releasePicker(key, "stale_status")
+		return "", false
+	case i.clock.Now().Sub(h.since) >= pickerHold:
+		i.releasePicker(key, "expired")
+		return "", false
+	}
+	i.releasePicker(key, "refused")
+	return h.word, true
+}
+
+// releasePicker drops the picker hold of an agent, if any.
+func (i *inbound) releasePicker(key domain.Key, reason string) {
+	h, ok := i.pickers[key]
+	if !ok {
+		return
+	}
+	delete(i.pickers, key)
+	i.log.Debug("picker hold cleared", slog.String("key", key.String()), slog.String("word", h.word),
+		slog.String("reason", reason), slog.Int64("age_ms", i.clock.Now().Sub(h.since).Milliseconds()))
 }
 
 // forwardRefusal names the statuses in which a forwarded command is not
@@ -501,8 +567,10 @@ func forwardWord(line string) string {
 
 // Fire runs the follow-up of a forwarded command once its settle timer
 // fired: read the screen, post it as a quoted reply and, for overlay
-// commands, send esc. A read failure is reported and the esc still goes
-// out so no overlay is left open. Only fatal Telegram errors are returned.
+// commands on Claude Code, send esc. A read failure is reported and the
+// esc still goes out so no overlay is left open. Other kinds keep their
+// picker open: the post ends with pickerHint instead. Only fatal Telegram
+// errors are returned.
 func (i *inbound) Fire(ctx context.Context, key domain.Key) error {
 	if group, ok := strings.CutPrefix(key.PaneID, albumPrefix); ok {
 		return i.fireAlbum(ctx, group)
@@ -517,11 +585,13 @@ func (i *inbound) Fire(ctx context.Context, key domain.Key) error {
 	}
 	delete(i.pending, key)
 	entry, hasTopic := i.topics.Entry(key)
-	_, alive := i.agents(key)
+	agent, alive := i.agents(key)
+	dismiss := f.cmd.Forward.Dismiss && domain.DismissesOverlay(agent.Kind)
+	keep := f.cmd.Forward.Dismiss && !dismiss
 	if !alive || !hasTopic || !entry.Status.Live() {
 		i.log.Debug("command follow-up skipped", slog.String("key", key.String()), slog.String("word", f.word),
 			slog.Bool("alive", alive), slog.Bool("topic", hasTopic && entry.Status.Live()))
-		if f.cmd.Forward.Dismiss && alive {
+		if dismiss && alive {
 			return i.dismiss(ctx, key, f)
 		}
 		return nil
@@ -533,7 +603,11 @@ func (i *inbound) Fire(ctx context.Context, key domain.Key) error {
 	screen, err := i.herdr.ReadScreen(ctx, key.PaneID, domain.ScreenVisible, lines)
 	if err != nil {
 		i.log.Warn("command screen read failed", slog.String("key", key.String()), slog.String("word", f.word), slog.String("err", err.Error()))
-		if err := i.reply(ctx, f.threadID, f.messageID, "⚠️ screen read failed: "+failureReason(err)); err != nil {
+		text := "⚠️ screen read failed: " + failureReason(err)
+		if keep {
+			text += "\n" + pickerHint
+		}
+		if err := i.reply(ctx, f.threadID, f.messageID, text); err != nil {
 			return err
 		}
 	} else {
@@ -548,14 +622,24 @@ func (i *inbound) Fire(ctx context.Context, key domain.Key) error {
 		if text == "" {
 			text = "(screen is empty)"
 		}
-		if err := i.absorb(i.send(ctx, domain.Outgoing{ThreadID: entry.ThreadID, Text: text, Code: true, ReplyTo: f.messageID})); err != nil {
+		out := domain.Outgoing{ThreadID: entry.ThreadID, Text: text, Code: true, ReplyTo: f.messageID}
+		if keep {
+			out.Footer = pickerHint
+		}
+		if err := i.absorb(i.send(ctx, out)); err != nil {
 			return err
 		}
 		i.log.Info("command screen posted", slog.String("key", key.String()), slog.String("word", f.word),
 			slog.Int("thread_id", entry.ThreadID), slog.Int("lines", strings.Count(text, "\n")+1),
-			slog.Int("bytes", len(text)), slog.Bool("dismiss", f.cmd.Forward.Dismiss))
+			slog.Int("bytes", len(text)), slog.String("kind", agent.Kind), slog.Bool("dismiss", dismiss), slog.Bool("picker_kept", keep))
 	}
-	if !f.cmd.Forward.Dismiss {
+	if keep {
+		i.pickers[key] = heldPicker{word: f.word, status: agent.Status, since: i.clock.Now()}
+		i.log.Info("command picker kept", slog.String("key", key.String()), slog.String("word", f.word),
+			slog.String("kind", agent.Kind), slog.String("status", string(agent.Status)), slog.Int("thread_id", entry.ThreadID))
+		return nil
+	}
+	if !dismiss {
 		return nil
 	}
 	return i.dismiss(ctx, key, f)
@@ -584,7 +668,7 @@ func (i *inbound) HandleGeneral(ctx context.Context, cmd domain.GeneralCommand) 
 	}
 	switch parsed.Kind {
 	case domain.CmdStatus:
-		text := i.statusSummary()
+		text := i.statusSummary(ctx)
 		return i.absorb(i.send(ctx, domain.Outgoing{ThreadID: 0, Text: text, HTML: true, ReplyTo: cmd.MessageID}))
 	case domain.CmdHelp:
 		return i.reply(ctx, 0, cmd.MessageID, helpText)
@@ -907,6 +991,9 @@ func (i *inbound) SetPresence(p *Presence) { i.presence = p }
 // shows how long each agent has been in its status; nil shows none.
 func (i *inbound) SetSince(fn func() map[domain.Key]time.Time) { i.since = fn }
 
+// SetQuota wires the usage lines shown under /status.
+func (i *inbound) SetQuota(q *Quota) { i.quota = q }
+
 // PressPanel serves a button of the options panel (callback data with the
 // panel prefix); the bridge routes such presses here.
 func (i *inbound) PressPanel(ctx context.Context, ev domain.ButtonPressed) error {
@@ -915,8 +1002,8 @@ func (i *inbound) PressPanel(ctx context.Context, ev domain.ButtonPressed) error
 
 // statusSummary lists the live agents sorted by label, each linked to its
 // topic and with its status duration when known, as HTML: the same text
-// as the dashboard without its footer.
-func (i *inbound) statusSummary() string {
+// as the dashboard without its footer, quota lines included.
+func (i *inbound) statusSummary(ctx context.Context) string {
 	v := statusView{
 		agents:   i.live(),
 		topics:   i.topics,
@@ -925,6 +1012,7 @@ func (i *inbound) statusSummary() string {
 		presence: i.presenceHeader(),
 		chatID:   i.cfg.ChatID,
 		now:      i.clock.Now(),
+		quota:    i.quota.Lines(ctx),
 	}
 	if i.since != nil {
 		v.since = i.since()
@@ -1108,11 +1196,23 @@ func (i *inbound) InboxFinished(ctx context.Context, r inboxResult) error {
 		return i.reply(ctx, r.threadID, r.messageID, fmt.Sprintf(inboxFailedFmt, r.failed[0]))
 	}
 	entry, hasTopic := i.topics.Entry(r.key)
-	if _, alive := i.agents(r.key); !alive || !hasTopic || !entry.Status.Live() {
+	agent, alive := i.agents(r.key)
+	if !alive || !hasTopic || !entry.Status.Live() {
 		i.log.Info("inbox delivery to exited agent", slog.String("key", r.key.String()), slog.Int("message_id", r.messageID))
 		return i.reply(ctx, r.threadID, r.messageID, fmt.Sprintf(inboxGoneFmt, strings.Join(baseNames(r.paths), ", ")))
 	}
-	if err := i.submitText(ctx, r.key.PaneID, entry.Status, domain.AttachmentPrompt(r.caption, r.paths)); err != nil {
+	// The attachment prompt ends with an Enter like any plain message, so a
+	// kept picker would take it as a choice: hold it back the same way.
+	if word, held := i.holdForPicker(r.key, agent); held {
+		i.log.Info("[FIX] attachment held back for open picker", slog.String("key", r.key.String()), slog.String("word", word),
+			slog.Int("thread_id", r.threadID), slog.Int("message_id", r.messageID), slog.Int("saved", len(r.paths)))
+		return i.reply(ctx, r.threadID, r.messageID, fmt.Sprintf(pickerRefusedFmt, "/"+word))
+	}
+	status := domain.StatusBlocked
+	if a, ok := i.agents(r.key); ok {
+		status = a.Status
+	}
+	if err := i.submitText(ctx, r.key.PaneID, status, domain.AttachmentPrompt(r.caption, r.paths)); err != nil {
 		return i.failed(ctx, msg, r.key, "prompt", err)
 	}
 	i.log.Info("inbox delivered", slog.String("key", r.key.String()), slog.Int("message_id", r.messageID), slog.Int("saved", len(r.paths)),

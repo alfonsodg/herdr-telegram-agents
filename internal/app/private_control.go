@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -33,10 +34,12 @@ type PrivateControl struct {
 	Read            func(context.Context, domain.ShareOrigin, domain.Command) error
 	Overview        func(context.Context, domain.PrivateMessage) error
 	InvalidateOwner func(context.Context, domain.Key) error
-	callbacks       map[string]privateButton
-	typing          map[domain.Key]domain.ShareOrigin
-	albums          map[string]*privateAlbum
-	denialNotices   map[string]uint64
+	// Log receives the control path's diagnostics; nil discards them.
+	Log           *slog.Logger
+	callbacks     map[string]privateButton
+	typing        map[domain.Key]domain.ShareOrigin
+	albums        map[string]*privateAlbum
+	denialNotices map[string]uint64
 }
 
 type privateButton struct {
@@ -46,6 +49,32 @@ type privateButton struct {
 	keys    []string
 	kind    string
 	expires time.Time
+	// seq is the agent's StateChangeSeq when a dialog button was drawn: a
+	// press acts only while the agent still waits at that same dialog.
+	seq int64
+}
+
+// log returns the configured logger or a discarding one.
+func (p *PrivateControl) log() *slog.Logger {
+	if p.Log == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return p.Log
+}
+
+// isDialog reports whether the button answers the agent's open dialog.
+func (b privateButton) isDialog() bool {
+	return b.kind == "dialog" || b.kind == "text"
+}
+
+// dropDialogButtons forgets the dialog buttons drawn for origin's mirror:
+// a newer post replaces that keyboard.
+func (p *PrivateControl) dropDialogButtons(o domain.ShareOrigin) {
+	for ref, b := range p.callbacks {
+		if b.isDialog() && b.origin.GrantID == o.GrantID && b.origin.Key == o.Key {
+			delete(p.callbacks, ref)
+		}
+	}
 }
 
 type privateAlbum struct {
@@ -138,11 +167,16 @@ func (p *PrivateControl) Handle(ctx context.Context, e domain.PrivateMessage) er
 	case domain.CmdInterrupt:
 		return p.keys(ctx, o, []string{domain.KeyInterrupt})
 	case domain.CmdForward:
-		if a.Kind != "claude" {
+		if a.Kind != domain.ClaudeKind || !cmd.Forward.Fits(a.Kind) {
 			return p.send(ctx, o, "This command is supported only for Claude Code.")
 		}
-		if cmd.Text == "/clear" && a.Status != domain.StatusIdle && a.Status != domain.StatusDone {
-			return p.send(ctx, o, "Wait until the agent is idle before /clear.")
+		// As on the owner's path: typed into a running turn or an open
+		// dialog, its Enter would confirm the highlighted option and the
+		// follow-up esc could interrupt the tool that just started.
+		if hint, refused := forwardRefusal(a.Status); refused {
+			p.log().Info("[FIX] private command refused", slog.String("key", o.Key.String()), slog.String("grant", o.GrantID),
+				slog.String("word", forwardWord(cmd.Text)), slog.String("status", string(a.Status)))
+			return p.send(ctx, o, "Not sent: "+hint+".")
 		}
 		err := p.effect(ctx, o, domain.ShareForward, func(ctx context.Context) error { return p.Herdr.Prompt(ctx, o.Key.PaneID, cmd.Text) })
 		if err == nil && cmd.Forward.Post != domain.ForwardPostNone {
@@ -287,6 +321,13 @@ func (p *PrivateControl) press(ctx context.Context, e domain.PrivateMessage) err
 	}
 	if b.kind == "close" {
 		return p.effect(ctx, o, domain.ShareClose, func(ctx context.Context) error { return p.Herdr.ClosePane(ctx, o.Key.PaneID) })
+	}
+	// The dialog may have been answered elsewhere and replaced by another:
+	// the old "1" would then answer a question the recipient never saw.
+	if a, live := p.Agent(o.Key); !live || a.Status != domain.StatusBlocked || a.StateChangeSeq != b.seq {
+		p.log().Info("[FIX] private dialog button stale", slog.String("key", o.Key.String()), slog.String("grant", o.GrantID),
+			slog.Bool("live", live), slog.String("status", string(a.Status)), slog.Int64("seq", a.StateChangeSeq), slog.Int64("button_seq", b.seq))
+		return p.send(ctx, o, "That question is no longer open.")
 	}
 	err := p.effect(ctx, o, domain.ShareDialog, func(ctx context.Context) error { return p.Herdr.SendKeys(ctx, o.Key.PaneID, b.keys) })
 	if err == nil && b.kind == "text" {

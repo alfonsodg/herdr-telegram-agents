@@ -72,7 +72,7 @@ func TestPanelOpenShowsGroupsAndRetiresPrevious(t *testing.T) {
 func TestPanelToggleSync(t *testing.T) {
 	f := newBridgeFixture(t)
 	pressPanel(f, t, 900, dataGroup(0))
-	if got := texts(f.tg.Buttons(900)); strings.Join(got, "|") != "☑ Herdr → Telegram sync|☑ Dashboard in General|↺ Reset to defaults|‹ Back|✖ Close" {
+	if got := texts(f.tg.Buttons(900)); strings.Join(got, "|") != "☑ Herdr → Telegram sync|☑ Dashboard in General|☑ Quota in the dashboard|↺ Reset to defaults|‹ Back|✖ Close" {
 		t.Fatalf("sync group buttons = %v", got)
 	}
 	if text := f.tg.Text(900); !strings.Contains(text, "<b>Herdr → Telegram sync</b>: Mirror Herdr agents") || !strings.Contains(text, "Current: on") {

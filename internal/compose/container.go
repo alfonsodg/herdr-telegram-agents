@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/permgps/herdr-telegram-agents/internal/adapters/github"
@@ -91,6 +92,7 @@ func BuildDoctor(env PluginEnv, version string, log *slog.Logger) *Doctor {
 	}
 	proc := system.NewProcess(env.StateDir, log)
 	mappings := state.NewMappingStore(env.StateDir, log)
+	claudeUsage := claudeUsageFile(env)
 	return &app.Doctor{
 		Version:       version,
 		Config:        state.NewConfigStore(env.ConfigDir, log),
@@ -105,9 +107,53 @@ func BuildDoctor(env PluginEnv, version string, log *slog.Logger) *Doctor {
 		},
 		Herdr:              herdr.NewGateway(env.SocketPath, log, herdr.DefaultBackoff),
 		SupportedProtocols: herdr.SupportedProtocolVersions(),
+		ClaudeUsage:        claudeUsage,
+		ClaudeTap:          claudeTapCommand(env, claudeUsage.Path()),
+		CodexUsage:         transcript.NewCodexUsage(log),
 		Clock:              realClock{},
 		Log:                log,
 	}
+}
+
+// claudeUsageFile is the status line tap's file under the state dir.
+func claudeUsageFile(env PluginEnv) *state.ClaudeUsageFile {
+	return state.NewClaudeUsageFile(filepath.Join(env.StateDir, state.ClaudeUsageFileName))
+}
+
+// quotaSources lists the quota providers in display order.
+func quotaSources(claude *state.ClaudeUsageFile, log *slog.Logger) []app.QuotaSource {
+	return []app.QuotaSource{
+		{Provider: domain.UsageClaude, Source: claude},
+		{Provider: domain.UsageCodex, Source: transcript.NewCodexUsage(log)},
+	}
+}
+
+// claudeTapCommand is the status line command prefix doctor suggests: the
+// running binary (the plugin's bin/herdr-tg) with the tap's file. Paths
+// with spaces are single-quoted for the shell Claude Code runs it in.
+func claudeTapCommand(env PluginEnv, file string) string {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		exe = filepath.Join(env.Root, "bin", "herdr-tg")
+	}
+	return shellWord(exe) + " usage-tap --out " + shellWord(file)
+}
+
+// shellWord quotes s for a POSIX shell when it holds anything but plain
+// path characters; a backslash counts as special, so a Windows path keeps
+// its separators in a POSIX shell.
+func shellWord(s string) string {
+	plain := s != ""
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("/._-+:", r)) {
+			plain = false
+			break
+		}
+	}
+	if plain {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // StartControl opens the daemon's control channel and serves it until ctx
@@ -192,6 +238,12 @@ func Notify(ctx context.Context, env PluginEnv, body string, log *slog.Logger) e
 	return g.Notify(ctx, NotifyTitle, body, domain.NotifySoundDefault)
 }
 
+// TapClaudeUsage is the status line tap behind `herdr-tg usage-tap`: it
+// copies in to out and stores Claude Code's rate-limit windows at path.
+func TapClaudeUsage(in io.Reader, out io.Writer, path string) error {
+	return state.TapClaudeUsage(in, out, path, time.Now)
+}
+
 // PaneOpener returns the herdr CLI runner used to open manifest panes.
 // OpenShared opens a file for reading without blocking a rename or delete
 // by another process; the logs pane uses it so that following the log does
@@ -221,7 +273,7 @@ func TightenPermissions(env PluginEnv, log *slog.Logger) int {
 	if env.StateDir != "" {
 		dirs = append(dirs, env.StateDir, filepath.Join(env.StateDir, state.InboxDirName))
 		names := []string{
-			state.MappingFileName, state.SharingFileName, state.UpdateFileName, state.PidFileName,
+			state.MappingFileName, state.SharingFileName, state.UpdateFileName, state.PidFileName, state.ClaudeUsageFileName,
 			logging.LogFileName, system.ErrLogFileName, system.UpdateWorkerErrLogFileName,
 		}
 		for i := 1; i <= logging.RotateKeep; i++ {
@@ -245,6 +297,26 @@ func BuildSupervisor(env PluginEnv, log *slog.Logger) *Supervisor {
 	proc := system.NewProcess(env.StateDir, log)
 	pid := state.NewPidFile(env.StateDir, proc.Alive, log).CheckStart(proc.StartTime)
 	return app.NewSupervisor(pid, proc, realClock{}, log)
+}
+
+// replySources is the reader chain behind done posts and /screen: Claude
+// Code transcripts by working directory, then the exact-session OpenCode
+// export, Codex rollout, Antigravity transcript and pi session file, then
+// the Muse session log of the pane's process (processes lists the pane's
+// pids). Each reader rejects the kinds it does not know with ErrNoReply, and
+// the chain keeps a reader's ErrReplyPending over a later reader's
+// "unsupported agent".
+func replySources(session func(context.Context, string) (domain.SessionTuple, error),
+	openCodeExport func(context.Context, string) ([]byte, error),
+	processes func(context.Context, string) ([]int, error), log *slog.Logger) domain.MultiReplySource {
+	return domain.MultiReplySource{
+		transcript.NewReader(log),
+		transcript.NewOpenCodeReader(session, openCodeExport, log),
+		transcript.NewCodexDirectoryReader(transcript.NewCodexReader(session, log), log),
+		transcript.NewAgyReader(session, log),
+		transcript.NewPiReader(session, log),
+		transcript.NewMuseReader(processes, log),
+	}
 }
 
 // cleanUpdateArtifacts removes staged update workers and backups left by
@@ -397,14 +469,12 @@ func BuildDaemon(ctx context.Context, env PluginEnv, cfg domain.Config, log *slo
 	capture := app.NewCapture(hg, registry.Live, clock, log)
 	inbox := state.NewInbox(env.StateDir, log)
 	inbox.MaxTotal = opts.InboxMaxTotalBytes
+	// One exporter serves the topic posts and the private mirror; its export
+	// files live under the state dir, and a crash's leftovers go now.
+	system.SweepOpenCodeExports(env.StateDir, log)
+	openCodeExport := system.NewOpenCodeExporter(env.StateDir, log).Export
 	bridge := app.NewBridge(cfg, hg, tg, registry, reconciler, capture, opts,
-		app.Services{Replies: domain.MultiReplySource{
-			transcript.NewReader(log),
-			transcript.NewOpenCodeReader(hg.AgentSession, system.NewOpenCodeExporter(log).Export, log),
-			transcript.NewCodexDirectoryReader(transcript.NewCodexReader(hg.AgentSession, log), log),
-			transcript.NewMuseReader(log),
-			transcript.NewAgyReader(hg.AgentSession, log),
-		}, Git: system.NewGitRunner(log), Inbox: inbox, Config: state.NewConfigStore(env.ConfigDir, log),
+		app.Services{Replies: replySources(hg.AgentSession, openCodeExport, hg.PaneProcesses, log), Git: system.NewGitRunner(log), Inbox: inbox, Config: state.NewConfigStore(env.ConfigDir, log),
 			Updates: BuildUpdateManager(env, log), UpdateJobs: state.NewUpdateStore(env.StateDir, log),
 			LaunchUpdate:  func(ctx context.Context, id string) (int, error) { return LaunchUpdateWorker(ctx, env, id, log) },
 			UpdateRunning: func() bool { return BuildSupervisor(env, log).Status().Running }}, clock, log)
@@ -418,6 +488,9 @@ func BuildDaemon(ctx context.Context, env PluginEnv, cfg domain.Config, log *slo
 	presence := app.NewPresence(system.NewIdleSource(log), opts, clock, log)
 	d = app.NewDaemon(cfg, hg, tg, registry, reconciler, bridge, capture, state.NewConfigStore(env.ConfigDir, log), opts, presence, clock, log)
 	d.SetInbox(inbox)
+	claudeUsage := claudeUsageFile(env)
+	log.Info("quota sources", slog.String("claude_file", claudeUsage.Path()), slog.Bool("codex", true))
+	d.SetQuota(app.NewQuota(quotaSources(claudeUsage, log), opts, clock, log))
 	d.Sharing = app.NewSharing(ctx, state.NewSharingStore(env.StateDir, log), log)
 	d.Sharing.BotID = tg.ConnectedBotID()
 	d.Sharing.Agent = registry.Agent
@@ -431,9 +504,9 @@ func BuildDaemon(ctx context.Context, env PluginEnv, cfg domain.Config, log *slo
 	privateReconciler := &app.PrivateReconciler{Automatic: opts.SyncEnabled, Sharing: d.Sharing, Telegram: privateTelegram, Agent: registry.Agent, Now: clock.Now, Log: log}
 	bridge.Shares.OnGrant = privateReconciler.Grant
 	bridge.PrivateReconciler = privateReconciler
-	bridge.SetPrivateControl(&app.PrivateControl{Sharing: d.Sharing, Telegram: privateTelegram, Transport: tg, Herdr: hg, Git: system.NewGitRunner(log), Inbox: inbox, Agent: registry.Agent, Now: clock.Now})
+	bridge.SetPrivateControl(&app.PrivateControl{Sharing: d.Sharing, Telegram: privateTelegram, Transport: tg, Herdr: hg, Git: system.NewGitRunner(log), Inbox: inbox, Agent: registry.Agent, Now: clock.Now, Log: log})
 
-	privateOutput := &app.PrivateOutput{Control: bridge.PrivateControl, Capture: capture, ExactReplies: transcript.NewOpenCodeReader(hg.AgentSession, system.NewOpenCodeExporter(log).Export, log), Automatic: opts.SyncEnabled}
+	privateOutput := &app.PrivateOutput{Control: bridge.PrivateControl, Capture: capture, ExactReplies: transcript.NewOpenCodeReader(hg.AgentSession, openCodeExport, log), Automatic: opts.SyncEnabled}
 	bridge.PrivateControl.Output = privateOutput
 	bridge.PrivateControl.Read = privateOutput.Read
 	privateDashboard := app.NewPrivateDashboard(bridge.PrivateControl, privateReconciler, cfg.BotUsername, tg)

@@ -27,12 +27,12 @@ type lastInputInfo struct {
 
 // idleFor subtracts the last input tick from the current tick count; both
 // are 32-bit and wrap together, so the unsigned difference stays right.
-func idleFor(context.Context) (time.Duration, error) {
+func idleFor(context.Context) (time.Duration, string, error) {
 	info := lastInputInfo{cbSize: uint32(unsafe.Sizeof(lastInputInfo{}))}
 	ok, _, err := getLastInputInfo.Call(uintptr(unsafe.Pointer(&info)))
 	if ok == 0 {
-		return 0, fmt.Errorf("GetLastInputInfo: %w", err)
+		return 0, "", fmt.Errorf("GetLastInputInfo: %w", err)
 	}
 	now, _, _ := getTickCount.Call()
-	return time.Duration(uint32(now)-info.dwTime) * time.Millisecond, nil
+	return time.Duration(uint32(now)-info.dwTime) * time.Millisecond, "GetLastInputInfo", nil
 }

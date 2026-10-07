@@ -1162,7 +1162,8 @@ func TestDaemonAwayCommandAndQuietOption(t *testing.T) {
 	}
 	// /here returns to the automatic verdict: quiet again.
 	f.tg.Push(domain.GeneralCommand{MessageID: 10, FromID: 1, Text: "/here"})
-	f.tick(t, "quiet after /here", func() bool { return f.daemon.Stats().Quiet == "on" })
+	// The verdict flips before the reply is sent: wait for both.
+	f.tick(t, "quiet after /here", func() bool { return f.daemon.Stats().Quiet == "on" && len(f.tg.Sent()) == 3 })
 	if sent := f.tg.Sent(); len(sent) != 3 || sent[2].Text != "🖥 presence is automatic again: at the desk, quiet on" {
 		t.Fatalf("/here reply = %+v", sent)
 	}
@@ -1384,6 +1385,28 @@ func TestDaemonNoticeDelayApplied(t *testing.T) {
 		s := f.tg.Settings()
 		return len(s) == 3 && s[2] == "noticedelay:60"
 	})
+	if err := f.stop(t); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestDaemonSurvivesReachabilityWithBrokenSharing: any Telegram user who
+// blocks the bot sends a private my_chat_member update. With the sharing
+// state unreadable (sharing disabled) recording it fails, and that failure
+// must not end the daemon.
+func TestDaemonSurvivesReachabilityWithBrokenSharing(t *testing.T) {
+	f := newDaemon(t)
+	store := testkit.NewMemSharingStore()
+	store.Fail(errors.New("sharing.json unreadable"))
+	f.daemon.Sharing = app.NewSharing(context.Background(), store, nil)
+	f.start(t)
+	f.waitCalls(t, 1)
+	f.tg.Push(domain.PrivateReachability{RecipientID: 99, Unavailable: true})
+	select {
+	case err := <-f.done:
+		t.Fatalf("daemon exited on a private reachability update: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
 	if err := f.stop(t); err != nil {
 		t.Fatal(err)
 	}

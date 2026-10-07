@@ -138,3 +138,45 @@ func TestPrivateOldDialogButtonDoesNotAnswerANewDialog(t *testing.T) {
 		})
 	}
 }
+
+// TestPrivateOldTextEntryButtonDoesNotAnswerANewDialog: the ✏️ button of an
+// answered question does not press its number in a newer dialog, and the
+// recipient is told the question is gone.
+func TestPrivateOldTextEntryButtonDoesNotAnswerANewDialog(t *testing.T) {
+	f := newPrivateFixture(t, domain.ShareControl)
+	ctx := context.Background()
+	output := &app.PrivateOutput{Control: f.p}
+	f.p.Output = output
+	f.h.SetScreen("p", "Which colour?\n\n❯ 1. Red\n  2. Green\n  3. Type something.\n\nEnter to select · ↑/↓ to navigate · Esc to cancel")
+	output.Observe(app.AgentEvent{Kind: app.AgentChanged, Agent: f.setAgent(domain.StatusBlocked, 1)})
+	f.now = f.now.Add(3 * time.Second)
+	if err := output.Tick(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sent := f.tg.Destination(10).Sent()
+	post := sent[len(sent)-1]
+	var text domain.Button
+	for _, b := range post.Buttons {
+		if strings.Contains(b.Text, "Type something") {
+			text = b
+		}
+	}
+	if text.Data == "" {
+		t.Fatalf("no text-entry button in %+v", post.Buttons)
+	}
+	f.setAgent(domain.StatusWorking, 2)
+	f.h.SetScreen("p", "Run rm -rf build?\n1. Yes\n2. No\n3. No, and tell Claude what to do differently")
+	f.setAgent(domain.StatusBlocked, 3)
+	press := domain.PrivateMessage{Contact: domain.PrivateContact{ActorID: 10}, Address: f.origin.Address,
+		MessageID: 1000 + len(sent) - 1, CallbackID: "old", CallbackData: text.Data}
+	if err := f.p.Handle(ctx, press); err != nil {
+		t.Fatal(err)
+	}
+	if keys := f.h.Keys(); len(keys) != 0 {
+		t.Fatalf("old text-entry button pressed into the new dialog: %+v", keys)
+	}
+	after := f.tg.Destination(10).Sent()
+	if last := after[len(after)-1]; last.Text != "That question is no longer open." {
+		t.Fatalf("stale press not answered: %+v", last)
+	}
+}

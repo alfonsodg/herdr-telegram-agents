@@ -336,6 +336,19 @@ func TestGitRunnerDoesNotEnterSubmoduleDiffs(t *testing.T) {
 			t.Fatalf("%v lost the submodule change:\n%s", args, out.Output)
 		}
 	}
+	// /git diff staged: the same guard holds for a staged submodule move.
+	git(dir, "add", "sub")
+	spec, ok := domain.ParseGit([]string{"diff", "staged"})
+	if !ok {
+		t.Fatal("diff staged not parsed")
+	}
+	out, err := r.Run(ctx, dir, spec.Args)
+	if data, rerr := os.ReadFile(marker); rerr == nil {
+		t.Fatalf("%v ran the submodule's diff.external:\n%s", spec.Args, data)
+	}
+	if err != nil || !strings.Contains(out.Output, "Subproject commit") {
+		t.Fatalf("%v: err %v, output:\n%s", spec.Args, err, out.Output)
+	}
 }
 
 // TestGitFilterNames: drivers from the user's own scopes (git-lfs) stay on,

@@ -178,3 +178,24 @@ func TestOutboundPendingReplyDoneThenIdle(t *testing.T) {
 		t.Fatalf("retry state left: %v", f.out.pendingReplies)
 	}
 }
+
+// TestOutboundPendingReplyDoneIdleWorking: done, then idle (the pane seen),
+// then a new turn during the wait drops the old turn's retry; nothing of the
+// old turn is posted.
+func TestOutboundPendingReplyDoneIdleWorking(t *testing.T) {
+	f, a := pendingReplyFixture(t, domain.DoneFormatted)
+	f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusDone)})
+	f.fire(t, 1)
+	f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusIdle)})
+	f.replies.Set(a.Key, "late answer")
+	f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusWorking)})
+	if _, left := f.out.pendingReplies[a.Key]; left {
+		t.Fatal("retry state kept after a new turn started")
+	}
+	f.clock.Advance(replyPendingDelay)
+	for _, s := range f.tg.Sent() {
+		if s.Text == "late answer" {
+			t.Fatalf("the old turn's answer was posted into the new turn: %+v", f.tg.Sent())
+		}
+	}
+}

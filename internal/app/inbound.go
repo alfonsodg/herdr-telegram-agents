@@ -208,7 +208,11 @@ func (i *inbound) Pending() int { return len(i.pending) }
 func (i *inbound) typed(ctx context.Context, msg domain.TopicMessage, key domain.Key, w typingWait) error {
 	i.log.Info("typed text delivered", slog.String("key", key.String()), slog.Int("thread_id", msg.ThreadID),
 		slog.Int("message_id", msg.MessageID), slog.Int("dialog_message_id", w.messageID), slog.Int("len", len(msg.Text)))
-	if err := i.herdr.Prompt(ctx, key.PaneID, msg.Text); err != nil {
+	status := domain.StatusBlocked
+	if a, ok := i.agents(key); ok {
+		status = a.Status
+	}
+	if err := i.submitText(ctx, key.PaneID, status, msg.Text); err != nil {
 		return i.failed(ctx, msg, key, "prompt", err)
 	}
 	if err := i.out.TypingDone(ctx, key, w, msg.Text); err != nil {
@@ -249,7 +253,7 @@ func (i *inbound) HandleTopic(ctx context.Context, msg domain.TopicMessage) erro
 	i.log.Debug("topic command text", slog.String("key", key.String()), slog.String("text", msg.Text), slog.Any("keys", cmd.Keys), slog.Int("lines", cmd.Lines))
 	switch cmd.Kind {
 	case domain.CmdPrompt:
-		if err := i.herdr.Prompt(ctx, key.PaneID, cmd.Text); err != nil {
+		if err := i.submitText(ctx, key.PaneID, agent.Status, cmd.Text); err != nil {
 			return i.failed(ctx, msg, key, "prompt", err)
 		}
 		i.log.Debug("herdr call ok", slog.String("method", "prompt"), slog.String("key", key.String()), slog.Int("message_id", msg.MessageID))
@@ -299,6 +303,17 @@ func (i *inbound) HandleTopic(ctx context.Context, msg domain.TopicMessage) erro
 	default:
 		return i.reply(ctx, msg.ThreadID, msg.MessageID, "unknown command, see /help")
 	}
+}
+
+// submitText delivers text to an agent. While the agent waits at a dialog
+// Herdr refuses agent.prompt (agent_blocked) before sending any input, so
+// the text is typed into the pane through pane.send_text and submitted
+// with an Enter: the operator's message is that dialog's answer.
+func (i *inbound) submitText(ctx context.Context, paneID string, status domain.Status, text string) error {
+	if status == domain.StatusBlocked {
+		return i.herdr.SendText(ctx, paneID, text)
+	}
+	return i.herdr.Prompt(ctx, paneID, text)
 }
 
 // control sends one control key (esc or ctrl+c) to a live agent in any
@@ -1090,7 +1105,7 @@ func (i *inbound) InboxFinished(ctx context.Context, r inboxResult) error {
 		i.log.Info("inbox delivery to exited agent", slog.String("key", r.key.String()), slog.Int("message_id", r.messageID))
 		return i.reply(ctx, r.threadID, r.messageID, fmt.Sprintf(inboxGoneFmt, strings.Join(baseNames(r.paths), ", ")))
 	}
-	if err := i.herdr.Prompt(ctx, r.key.PaneID, domain.AttachmentPrompt(r.caption, r.paths)); err != nil {
+	if err := i.submitText(ctx, r.key.PaneID, entry.Status, domain.AttachmentPrompt(r.caption, r.paths)); err != nil {
 		return i.failed(ctx, msg, r.key, "prompt", err)
 	}
 	i.log.Info("inbox delivered", slog.String("key", r.key.String()), slog.Int("message_id", r.messageID), slog.Int("saved", len(r.paths)),

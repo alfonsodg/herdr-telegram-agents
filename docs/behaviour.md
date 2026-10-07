@@ -143,6 +143,11 @@ at DEBUG without screen text; a final failed read produces one WARN.
   default) the status line and the mode hint Claude Code draws under the
   dialog are cut from the post; the dialog's own lines never are, so the
   buttons are found as before.
+- Any other plain message while the agent is blocked is typed into its
+  dialog and submitted with Enter (`pane.send_text` and then
+  `agent.send_keys`), because Herdr refuses `agent.prompt` for an agent
+  waiting at a question or approval UI: the message becomes the dialog's
+  input. Slash commands still run as usual.
 - Pressing ✏️ sends that entry's number, turns the keyboard into `✏️ waiting
   for your text`, answers `now send the text` and posts a quoted `✏️ Type
   something: send the text as your next message` with Telegram's

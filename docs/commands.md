@@ -67,7 +67,7 @@ Anything you write in a topic reaches the agent:
 | `/stop` | `esc` through `agent.send_keys`, in any status: Claude Code cancels the running turn or dismisses the open dialog; the reply is `⏹ sent esc` |
 | `/interrupt` | `ctrl+c` through `agent.send_keys`, in any status: a hard interrupt; the reply is `⛔ sent ctrl+c` |
 | `/close` | the question `Close <label>? The pane and its tab go away.` with `Yes, close` / `No` buttons; `Yes` closes the pane through `pane.close` (the tab goes with it when it held nothing else) and the topic gets 🏁 through the usual exit path; `No` keeps everything. Only the latest question of an agent acts; see [Questions and buttons](behaviour.md#questions-and-buttons) |
-| `/clear`, `/compact [instructions]`, `/usage`, `/model [name]` | typed into the agent as its own Claude Code command; two seconds later the screen is posted as a quoted reply (`/usage` and a bare `/model` are closed with `esc` for you); only while the agent is idle |
+| `/clear`, `/compact [instructions]`, `/usage`, `/model [name]` | typed into the agent as its own command; two seconds later the screen is posted as a quoted reply; only while the agent is idle. On Claude Code `/usage` and a bare `/model` are closed with `esc` for you; other agents keep their picker open, see [Claude Code commands](#claude-code-commands) |
 | `/status` | `<emoji> <status> · <label> · pane <id>` |
 | `/options` | a hint: the settings panel lives in General |
 | `/away`, `/here`, `/new`, `/observers` | a hint: these commands live in General |
@@ -93,8 +93,27 @@ posts nothing itself: the topic icon turns ⚡ while it runs and the usual
 blocked is refused with a hint, because the text would land in the running
 turn or in a dialog and the `esc` could interrupt it; Herdr's detection dips
 out of **working** for a second or two while a tool runs, so a refusal can be
-spurious, just send the command again. Agents of other kinds (Codex, Gemini)
-get the same text as-is and the screen post shows how they reacted.
+spurious, just send the command again.
+
+Agents of other kinds (Codex, OpenCode, Gemini) get the same text as-is and
+the screen post shows how they reacted. Their `/model` and `/usage` open a
+picker or menu that takes a choice, so the automatic `esc` is sent to Claude
+Code only: elsewhere the picker stays open and the screen post ends with
+`picker left open: /keys up, down, enter to choose, /stop to close`. Choose
+with `/keys` (`/keys down`, `/keys enter`; Codex also takes the option
+number, `/keys 2`) or close it with `/stop`.
+
+An open picker would swallow your next plain message: Codex takes its Enter
+as a choice, OpenCode types it into the picker's filter. So the first plain
+message after a kept picker (short replies such as `y` or `1` included) is
+not typed; it gets `⚠️ the /model picker may still be open, so this was not
+sent: choose with /keys up, down, enter or close it with /stop, then send it
+again`. The hold is one-shot because the bridge cannot see whether the picker
+was closed at the desk: send the message again and it goes through. `/keys`,
+`/stop`, `/interrupt`, another of these commands, a change of the agent's
+status, or ten minutes release the hold without a refusal. Attachments and
+the free text after a ✏️ press are typed as before and are not held back. OpenCode opens the same model picker
+for `/model` as for its own `/models`, so no extra command is needed.
 
 ## Agent control
 
@@ -223,7 +242,7 @@ requests in a separate operating-system account.
 | `/agents`, `/status`, `/help`, `/screen [N]` | Read or Control |
 | `/screen all` | History captured after this grant's activation |
 | Prompts, supported files, dialog buttons, `/keys`, `/stop`, `/interrupt` | Control |
-| `/clear`, `/compact`, `/usage`, `/model` | Control; Claude Code only |
+| `/clear`, `/compact`, `/usage`, `/model` | Control; Claude Code only, so no picker is ever left open on a shared agent |
 | `/git status`, `/git diff`, `/git log` | Control, or Read with repository-read enabled |
 | `/close` | Control plus close-agent permission; separate confirmation |
 | `/focus` | Control plus local-focus permission |

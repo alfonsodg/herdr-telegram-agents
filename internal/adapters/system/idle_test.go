@@ -11,8 +11,9 @@ import (
 
 // TestIdleSourceOnHost samples the real source once. macOS and Windows have
 // one; a build agent without an input session may fail the call, which is
-// allowed as long as the failure is not "unsupported". Everything else must
-// answer ErrIdleUnsupported.
+// allowed as long as the failure is not "unsupported". Linux is best-effort:
+// any outcome is tolerated because a session source may be absent. Every
+// other platform must answer ErrIdleUnsupported.
 func TestIdleSourceOnHost(t *testing.T) {
 	src := NewIdleSource(nil)
 	d, err := src.Idle(context.Background())
@@ -23,6 +24,14 @@ func TestIdleSourceOnHost(t *testing.T) {
 		}
 		if err != nil {
 			t.Logf("idle sample failed on this host (tolerated): %v", err)
+			return
+		}
+		if d < 0 {
+			t.Errorf("negative idle %v", d)
+		}
+	case "linux":
+		if err != nil {
+			t.Logf("Linux idle sample failed on this host (tolerated): %v", err)
 			return
 		}
 		if d < 0 {

@@ -26,16 +26,21 @@ type Presence struct {
 
 	// atDesk is the latest automatic verdict, sampled says whether one
 	// exists yet, unsupported that the source answered ErrIdleUnsupported
-	// (final for the daemon's life), failing that the last sample failed
-	// (so the warning is logged once).
+	// (retried every presenceUnsupportedRetry in case one appears),
+	// failing that the last sample failed (so the warning is logged once).
 	atDesk      bool
 	sampled     bool
 	unsupported bool
 	failing     bool
+	// lastSampleTry is when the source was last asked; an unsupported
+	// platform is not asked again until presenceUnsupportedRetry passed.
+	lastSampleTry time.Time
 	// manualAway and manualUntil are the /away override; a zero
-	// manualUntil means "until /here".
+	// manualUntil means "until /here". manualHere is the /here override on
+	// a platform without an idle source: quiet on until /away.
 	manualAway  bool
 	manualUntil time.Time
+	manualHere  bool
 	// quiet is the last effective flag handed out through Changes.
 	quiet bool
 
@@ -83,6 +88,7 @@ func (p *Presence) state() domain.PresenceState {
 		Supported:  !p.unsupported,
 		AtDesk:     p.sampled && p.atDesk,
 		ManualAway: p.manualAway,
+		ManualHere: p.manualHere,
 		Until:      p.manualUntil,
 		Quiet:      p.quiet,
 	}
@@ -102,17 +108,26 @@ func (p *Presence) Poll(ctx context.Context) {
 	p.recompute()
 }
 
-// sample asks the idle source once and updates the automatic verdict.
+// sample asks the idle source once and updates the automatic verdict. A
+// platform that answered unsupported is retried now and then instead of
+// staying quiet-less until restart: a desktop session can appear later.
 func (p *Presence) sample(ctx context.Context) {
-	if p.unsupported {
+	if p.idle == nil {
 		return
 	}
+	now := p.clock.Now()
+	if p.unsupported && !p.lastSampleTry.IsZero() && now.Sub(p.lastSampleTry) < presenceUnsupportedRetry {
+		return
+	}
+	p.lastSampleTry = now
 	d, err := p.idle.Idle(ctx)
 	switch {
 	case errors.Is(err, domain.ErrIdleUnsupported):
+		if !p.unsupported {
+			p.log.Warn("presence: no input idle source on this platform; /here turns quiet on by hand until /away")
+		}
 		p.unsupported = true
 		p.atDesk, p.sampled = false, true
-		p.log.Warn("presence: no input idle source on this platform, quiet mode stays off; /away and /here still answer")
 		return
 	case err != nil:
 		if !p.failing {
@@ -124,6 +139,10 @@ func (p *Presence) sample(ctx context.Context) {
 	if p.failing {
 		p.failing = false
 		p.log.Info("presence source recovered")
+	}
+	if p.unsupported {
+		p.unsupported = false
+		p.log.Info("presence source appeared")
 	}
 	threshold := p.opts.QuietIdle()
 	atDesk := d < threshold
@@ -140,6 +159,7 @@ func (p *Presence) Away(d time.Duration, by int64) domain.PresenceState {
 	defer p.mu.Unlock()
 	p.manualAway = true
 	p.manualUntil = time.Time{}
+	p.manualHere = false
 	if d > 0 {
 		p.manualUntil = p.clock.Now().Add(d)
 	}
@@ -148,12 +168,17 @@ func (p *Presence) Away(d time.Duration, by int64) domain.PresenceState {
 	return p.state()
 }
 
-// Here clears the /away override; the automatic verdict rules again.
+// Here clears the /away override and the automatic verdict rules again.
+// Without an idle source it is also the manual "at the desk": quiet turns
+// on until /away, so the workflow works on platforms like KDE Wayland.
 func (p *Presence) Here(by int64) domain.PresenceState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.manualAway, p.manualUntil = false, time.Time{}
-	p.log.Info("presence automatic", slog.Int64("by", by), slog.Bool("at_desk", p.atDesk))
+	if p.unsupported {
+		p.manualHere = true
+	}
+	p.log.Info("presence here", slog.Int64("by", by), slog.Bool("manual", p.manualHere), slog.Bool("at_desk", p.atDesk))
 	p.recompute()
 	return p.state()
 }
@@ -169,13 +194,14 @@ func (p *Presence) Recompute() {
 // hands the new value to the daemon loop, replacing an undelivered one so
 // the loop always sees the latest state.
 func (p *Presence) recompute() {
-	quiet := p.opts.QuietEnabled() && !p.unsupported && p.sampled && p.atDesk && !p.manualAway
+	automatic := !p.unsupported && p.sampled && p.atDesk
+	quiet := p.opts.QuietEnabled() && !p.manualAway && (p.manualHere || automatic)
 	if quiet == p.quiet {
 		return
 	}
 	p.quiet = quiet
 	if quiet {
-		p.log.Info("quiet on: operator at the desk")
+		p.log.Info("quiet on: operator at the desk", slog.Bool("manual", p.manualHere))
 	} else {
 		p.log.Info("quiet off: operator away, catching up", slog.Bool("manual", p.manualAway), slog.Bool("at_desk", p.atDesk))
 	}

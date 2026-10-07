@@ -15,23 +15,29 @@ type PresenceState struct {
 	AtDesk bool
 	// ManualAway is set by /away and cleared by /here or by Until passing.
 	ManualAway bool
+	// ManualHere is set by /here on a platform without an idle source:
+	// quiet on by hand until /away.
+	ManualHere bool
 	// Until is when a timed /away expires; zero for "until /here".
 	Until time.Time
-	// Quiet is the effective flag: Enabled && Supported && AtDesk && !ManualAway.
+	// Quiet is the effective flag: Enabled && !ManualAway && (ManualHere ||
+	// (Supported && AtDesk)).
 	Quiet bool
 }
 
 // Word is the one-token form for the daemon's status line: off (quiet mode
-// disabled or unsupported here), on (quiet in force), away (automatic
-// verdict), away-manual (/away in force).
+// disabled, or unsupported with no manual presence), on (quiet in force),
+// away (automatic verdict), away-manual (/away in force).
 func (s PresenceState) Word() string {
 	switch {
-	case !s.Enabled || !s.Supported:
+	case !s.Enabled:
+		return "off"
+	case s.Quiet:
+		return "on"
+	case !s.Supported:
 		return "off"
 	case s.ManualAway:
 		return "away-manual"
-	case s.Quiet:
-		return "on"
 	default:
 		return "away"
 	}

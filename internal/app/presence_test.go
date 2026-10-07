@@ -195,11 +195,41 @@ func TestPresenceUnsupportedAndFailing(t *testing.T) {
 		t.Errorf("Word = %q", got)
 	}
 	st := f.p.Away(0, 7)
-	if st.Quiet || st.Word() != "off" {
+	if st.Quiet || !st.ManualAway || st.Word() != "off" {
 		t.Errorf("/away on unsupported platform = %+v", st)
 	}
 	if _, ok := f.change(); ok {
 		t.Error("unsupported source queued a change")
+	}
+
+	// /here on a platform with no source turns quiet on by hand until /away.
+	st = f.p.Here(7)
+	if !st.ManualHere || !st.Quiet || st.Word() != "on" {
+		t.Errorf("/here manual = %+v", st)
+	}
+	if v, ok := f.change(); !ok || !v {
+		t.Fatalf("change after manual /here = %v, %v", v, ok)
+	}
+	if st = f.p.Away(0, 7); st.ManualHere || st.Quiet || st.Word() != "off" {
+		t.Errorf("/away did not clear the manual here = %+v", st)
+	}
+	f.change()
+	// Unsupported sources are retried, so one that appears later recovers;
+	// quiet is back on by hand meanwhile.
+	f.p.Here(7)
+	f.change()
+	if idle.Calls() != 1 {
+		t.Fatalf("calls = %d, want the retry to wait", idle.Calls())
+	}
+	idle.Set(time.Second)
+	f.p.Poll(ctx)
+	if f.p.State().Supported {
+		t.Fatal("source recovered inside the retry window")
+	}
+	f.clock.Advance(time.Minute)
+	f.p.Poll(ctx)
+	if !f.p.State().Supported || !f.p.Quiet() {
+		t.Fatalf("source did not recover: %+v", f.p.State())
 	}
 
 	nilSource := app.NewPresence(nil, f.opts, f.clock, nil)

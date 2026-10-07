@@ -729,14 +729,14 @@ func TestInboundPresenceUnavailableAndTopicHint(t *testing.T) {
 	p := NewPresence(idle, f.opts, f.clock, nil)
 	f.in.SetPresence(p)
 	p.Poll(f.ctx)
-	if got := general(f, t, 2, "/here"); got != "🖥 presence is automatic again: not available on this platform" {
+	if got := general(f, t, 2, "/here"); got != "🖥 quiet on until /away (no automatic idle source here)" {
 		t.Fatalf("/here on unsupported platform = %q", got)
 	}
-	if got := general(f, t, 3, "/away 2h"); got != presenceAwayNone {
+	if got := general(f, t, 3, "/away 2h"); !strings.HasPrefix(got, "🏃 away until ") || !strings.HasSuffix(got, ", Telegram gets everything; /here returns to automatic") {
 		t.Fatalf("/away on unsupported platform = %q", got)
 	}
-	if st := p.State(); st.ManualAway || !st.Until.IsZero() {
-		t.Fatalf("/away on unsupported platform changed the state: %+v", st)
+	if st := p.State(); !st.ManualAway || st.Until.IsZero() {
+		t.Fatalf("/away on unsupported platform did not apply: %+v", st)
 	}
 	f.add(t, "p1", "t1", "alpha", domain.StatusIdle)
 	for id, text := range map[int]string{5: "/away", 6: "/here"} {

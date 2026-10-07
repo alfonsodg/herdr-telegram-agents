@@ -226,7 +226,7 @@ func buildOptionSpecs() []OptionSpec {
 			Key:         OptionQuietEnabled,
 			Group:       GroupQuiet,
 			Title:       "Quiet while at the desk",
-			Description: "While you are typing on this machine, topic edits wait and screen posts are silent; everything catches up when you leave. macOS and Windows only.",
+			Description: "While you are at this machine, topic edits wait and screen posts follow the Screen posts choice; everything catches up when you leave. Automatic on macOS and Windows; on Linux it asks Mutter, the freedesktop ScreenSaver or xprintidle, and /here turns quiet on by hand where none answers.",
 			Kind:        KindBool,
 			Default:     "false",
 		},

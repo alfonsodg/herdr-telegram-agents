@@ -110,6 +110,11 @@ const (
 	typingTimeout = 10 * time.Minute
 	// typingHeadRunes is how much of the typed text the ✅ ✏️ button shows.
 	typingHeadRunes = 30
+	// presenceUnsupportedRetry is how often a platform that reported no
+	// input idle source is asked again: a session can appear later (a
+	// desktop logs in, a helper gets installed), so quiet mode must recover
+	// without a restart.
+	presenceUnsupportedRetry = time.Minute
 	// pendingRetryDelay re-reads a reply whose turn is not over yet: the
 	// done post is skipped and retried after this delay instead of falling
 	// back to a fragment or losing the post when no further status change

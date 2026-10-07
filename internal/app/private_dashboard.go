@@ -156,7 +156,7 @@ func (d *PrivateDashboard) Refresh(ctx context.Context, recipient int64, explici
 				control = control || g.Role == domain.ShareControl
 			}
 			if control {
-				commands = append(commands, "keys", "stop", "interrupt", "clear", "compact", "usage", "model", "git")
+				commands = append(commands, "keys", "stop", "interrupt", "clear", "compact", "usage", "model", "models", "git")
 			}
 			for _, pair := range []struct {
 				action  domain.ShareAction

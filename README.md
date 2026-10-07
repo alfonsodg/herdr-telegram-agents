@@ -126,6 +126,7 @@ checks, state, and manual commands.
 
 | Page | Contents |
 |------|----------|
+| [This fork](docs/fork.md) | Deltas carried here and the sync routine for a new upstream release |
 | [Commands](docs/commands.md) | Topic and General commands, posts, buttons, attachments |
 | [Behavior](docs/behaviour.md) | Sync rules, settings, updates, access, state and logs |
 | [Development](docs/development.md) | Source builds, release process, updater internals |

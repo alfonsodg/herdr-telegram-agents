@@ -50,7 +50,7 @@ func TestParseCommand(t *testing.T) {
 		{"forward model bare opens the picker", "/model", "herdr_bot", domain.Command{Kind: domain.CmdForward, Text: "/model", Forward: domain.ForwardRule{Post: domain.ForwardPostScreen, Dismiss: true}}},
 		{"forward model with name", "/model sonnet", "herdr_bot", domain.Command{Kind: domain.CmdForward, Text: "/model sonnet", Forward: domain.ForwardRule{Post: domain.ForwardPostTail}}},
 		{"forward model with suffix and name", "/model@herdr_bot opus", "herdr_bot", domain.Command{Kind: domain.CmdForward, Text: "/model opus", Forward: domain.ForwardRule{Post: domain.ForwardPostTail}}},
-		{"forward opencode models picker", "/models", "herdr_bot", domain.Command{Kind: domain.CmdForward, Text: "/models", Forward: domain.ForwardRule{Post: domain.ForwardPostScreen, Dismiss: true}}},
+		{"forward opencode models picker", "/models", "herdr_bot", domain.Command{Kind: domain.CmdForward, Text: "/models", Forward: domain.ForwardRule{Post: domain.ForwardPostScreen, Dismiss: true, Kind: domain.OpenCodeKind}}},
 		{"near miss stays unknown", "/modelz", "herdr_bot", domain.Command{Kind: domain.CmdUnknown, Text: "/modelz"}},
 		{"away until here", "/away", "herdr_bot", domain.Command{Kind: domain.CmdAway}},
 		{"away hours", "/away 2h", "herdr_bot", domain.Command{Kind: domain.CmdAway, Away: 2 * time.Hour}},

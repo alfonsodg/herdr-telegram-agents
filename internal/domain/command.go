@@ -75,6 +75,9 @@ const (
 // ClaudeKind is the agent kind Herdr reports for Claude Code panes.
 const ClaudeKind = "claude"
 
+// OpenCodeKind is the Herdr agent kind of OpenCode panes.
+const OpenCodeKind = "opencode"
+
 // DefaultAgentKind is what /new starts when no kind is given.
 const DefaultAgentKind = ClaudeKind
 
@@ -186,6 +189,14 @@ type ForwardRule struct {
 	// (/usage, the /model picker): Claude Code gets esc after the screen
 	// was read, other kinds keep it open (see DismissesOverlay).
 	Dismiss bool
+	// Kind is the only agent kind that has this command; empty means any.
+	// On another kind the word would run as a plain prompt.
+	Kind string
+}
+
+// Fits reports whether the command exists on an agent of kind.
+func (r ForwardRule) Fits(kind string) bool {
+	return r.Kind == "" || strings.EqualFold(r.Kind, kind)
 }
 
 // forwardRules maps the agent commands an operator may send from a topic
@@ -197,7 +208,7 @@ var forwardRules = map[string]ForwardRule{
 	"compact": {Post: ForwardPostNone},
 	"usage":   {Post: ForwardPostScreen, Dismiss: true},
 	"model":   {Post: ForwardPostScreen, Dismiss: true},
-	"models":  {Post: ForwardPostScreen, Dismiss: true},
+	"models":  {Post: ForwardPostScreen, Dismiss: true, Kind: OpenCodeKind},
 }
 
 // forwardRuleFor resolves the rule for a slash word; /model with a name

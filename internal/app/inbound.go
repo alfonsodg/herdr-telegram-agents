@@ -48,7 +48,10 @@ const (
 	pickerHint = "picker left open: /keys up, down, enter to choose, /stop to close"
 	// pickerRefusedFmt answers the plain message held back by a kept
 	// picker; %s is the command that opened it.
-	pickerRefusedFmt = "⚠️ the %s picker may still be open, so this was not sent: choose with /keys up, down, enter or close it with /stop, then send it again"
+	// forwardWrongKindFmt answers a forwarded command that only another
+	// agent kind has (today /models, OpenCode's model picker).
+	forwardWrongKindFmt = "⚠️ /%s is OpenCode's model picker; this agent is not OpenCode, use /model"
+	pickerRefusedFmt    = "⚠️ the %s picker may still be open, so this was not sent: choose with /keys up, down, enter or close it with /stop, then send it again"
 	// topicOnly answers an agent command written in General.
 	topicOnly = "agent commands live in the agent's topic"
 	// closePrefix marks the callback data of the /close keyboard; closeYes
@@ -465,6 +468,11 @@ func (i *inbound) forward(ctx context.Context, msg domain.TopicMessage, key doma
 		i.log.Info("command refused", slog.String("key", key.String()), slog.String("word", word),
 			slog.String("status", string(agent.Status)), slog.Int("message_id", msg.MessageID))
 		return i.reply(ctx, msg.ThreadID, msg.MessageID, "⚠️ "+hint)
+	}
+	if !cmd.Forward.Fits(agent.Kind) {
+		i.log.Info("[FIX] command refused for agent kind", slog.String("key", key.String()), slog.String("word", word),
+			slog.String("kind", agent.Kind), slog.Int("message_id", msg.MessageID))
+		return i.reply(ctx, msg.ThreadID, msg.MessageID, fmt.Sprintf(forwardWrongKindFmt, word))
 	}
 	if err := i.herdr.Prompt(ctx, key.PaneID, cmd.Text); err != nil {
 		return i.failed(ctx, msg, key, "prompt", err)

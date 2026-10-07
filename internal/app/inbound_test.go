@@ -542,6 +542,30 @@ func TestInboundForwardModelsOnOpenCodeKeepsPicker(t *testing.T) {
 	}
 }
 
+// TestInboundForwardModelsOnlyOnOpenCode: /models is OpenCode's own command;
+// on any other kind it is not typed (it would run as a plain prompt) and
+// sets no picker hold.
+func TestInboundForwardModelsOnlyOnOpenCode(t *testing.T) {
+	for _, kind := range []string{"claude", "codex", ""} {
+		t.Run("kind="+kind, func(t *testing.T) {
+			f := newBridgeFixture(t)
+			a := f.withKind(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle), kind)
+			if err := f.in.HandleTopic(f.ctx, topicMsg(101, 32, "/models")); err != nil {
+				t.Fatal(err)
+			}
+			if p := f.herdr.Prompts(); len(p) != 0 {
+				t.Fatalf("/models typed into %q: %v", kind, p)
+			}
+			if sent := f.tg.Sent(); len(sent) != 1 || !strings.Contains(sent[0].Text, "OpenCode") || sent[0].ReplyTo != 32 {
+				t.Fatalf("Sent = %+v", sent)
+			}
+			if _, held := f.in.pickers[a.Key]; held {
+				t.Fatal("picker hold set for a command that was not sent")
+			}
+		})
+	}
+}
+
 // keptPicker leaves a Codex /model picker open on p1 and returns the agent.
 func keptPicker(t *testing.T, f *bridgeFixture) domain.Agent {
 	t.Helper()

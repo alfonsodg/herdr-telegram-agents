@@ -1794,6 +1794,77 @@ func TestInboundPromptBlockedGuardNeverTypesBlind(t *testing.T) {
 	}
 }
 
+const twinDialog = `¿Otro color?
+
+❯ 1. Rojo
+     cálido
+  2. Verde
+     natural
+  3. Azul
+     frío
+  4. Type something.
+────────────────────────────────────────
+  5. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel`
+
+// TestBlockedDialogStateFailsClosedOnReadError: a read that fails is not a
+// dialog and not an open box; nothing may be typed on an unknown screen.
+func TestBlockedDialogStateFailsClosedOnReadError(t *testing.T) {
+	f := newBridgeFixture(t)
+	a := blockedWithDialog(t, f, dialogScreen)
+	kb, ok := f.out.keyboards[a.Key]
+	if !ok {
+		t.Fatal("no keyboard stored for the blocked post")
+	}
+	f.herdr.FailNext("read", errors.New("boom"))
+	if open, known := f.out.blockedDialogState(f.ctx, a.Key, kb); open || known {
+		t.Fatalf("open=%v known=%v, want false, false", open, known)
+	}
+}
+
+// TestInboundPromptWhileBlockedBlankScreenPostsHint: the entry key opens a
+// box only when the screen shows it; a blank screen never receives text.
+func TestInboundPromptWhileBlockedBlankScreenPostsHint(t *testing.T) {
+	f := newBridgeFixture(t)
+	blockedWithDialog(t, f, dialogScreen)
+	f.herdr.SetScreenAfterKeys("4", "")
+	f.tg.Reset()
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 5, "Que sigue?")); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.herdr.Texts()); n != 0 {
+		t.Fatalf("text typed onto a blank screen: %q", f.herdr.Texts())
+	}
+	sent := f.tg.Sent()
+	if last := sent[len(sent)-1]; !strings.Contains(last.Text, "waiting at a dialog") {
+		t.Fatalf("hint = %+v", last)
+	}
+}
+
+// TestInboundPromptWhileBlockedTwinDialogPostsHint: a replacement question
+// with the same option count and text-entry number must not receive the
+// answer meant for the old one.
+func TestInboundPromptWhileBlockedTwinDialogPostsHint(t *testing.T) {
+	f := newBridgeFixture(t)
+	blockedWithDialog(t, f, dialogScreen)
+	f.herdr.SetScreen("p1", twinDialog)
+	f.tg.Reset()
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 5, "Que sigue?")); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.herdr.Keys()); n != 0 {
+		t.Fatalf("keys sent to a replaced dialog: %+v", f.herdr.Keys())
+	}
+	if n := len(f.herdr.Texts()); n != 0 {
+		t.Fatalf("text typed into a replaced dialog: %q", f.herdr.Texts())
+	}
+	sent := f.tg.Sent()
+	if last := sent[len(sent)-1]; !strings.Contains(last.Text, "waiting at a dialog") {
+		t.Fatalf("hint = %+v", last)
+	}
+}
+
 func opCmd(id int, text string) domain.GeneralCommand {
 	return domain.GeneralCommand{MessageID: id, FromID: 1, Text: text, Role: domain.RoleOperator}
 }

@@ -1148,7 +1148,7 @@ func (o *outbound) AnswerBlocked(ctx context.Context, key domain.Key, text strin
 	if !ok || kb.textEntry == 0 {
 		return false, nil
 	}
-	if !o.blockedDialogStillOpen(ctx, key, kb) {
+	if open, known := o.blockedDialogState(ctx, key, kb); !known || !open {
 		return false, nil
 	}
 	if err := o.herdr.SendKeys(ctx, key.PaneID, []string{strconv.Itoa(kb.textEntry)}); err != nil {
@@ -1169,22 +1169,38 @@ func (o *outbound) AnswerBlocked(ctx context.Context, key domain.Key, text strin
 	return true, nil
 }
 
-// blockedDialogStillOpen re-reads the screen and reports whether the dialog
-// behind kb is still the one on screen: same choices, multi flag and
-// text-entry number, with a text entry present at all.
-func (o *outbound) blockedDialogStillOpen(ctx context.Context, key domain.Key, kb keyboard) bool {
+// blockedDialogState reads the screen and classifies it against the dialog
+// behind kb: open reports the same dialog still on screen, known reports a
+// successful read. An unknown screen (a failed read) is neither, so nothing
+// is ever typed on the strength of a missing screen.
+func (o *outbound) blockedDialogState(ctx context.Context, key domain.Key, kb keyboard) (open, known bool) {
 	screen, err := o.herdr.ReadScreen(ctx, key.PaneID, domain.ScreenDetection, blockedLines)
 	if err != nil {
-		return false
+		return false, false
 	}
 	d := domain.ParseDialog(o.clean(key, screen.Text))
-	return d.TextEntry != 0 && len(d.Choices) == len(kb.choices) && d.Multi == kb.multi && d.TextEntry == kb.textEntry
+	return d.TextEntry != 0 && sameChoices(d, kb), true
 }
 
-// waitBlockedField polls the screen until the dialog is no longer there,
-// the chosen text entry having replaced it with its box. A box that never
-// appears (or reads that never succeed) times out; text is never typed
-// then.
+// sameChoices compares the dialog with the stored keyboard beyond its
+// shape: a replacement question with the same option count and text-entry
+// number must not pass.
+func sameChoices(d domain.Dialog, kb keyboard) bool {
+	if len(d.Choices) != len(kb.choices) || d.Multi != kb.multi || d.TextEntry != kb.textEntry {
+		return false
+	}
+	for i, c := range d.Choices {
+		if c.Number != kb.choices[i].Number || c.Label != kb.choices[i].Label {
+			return false
+		}
+	}
+	return true
+}
+
+// waitBlockedField polls until the dialog gave way to a positively
+// identified input box (the prompt marker). A failed read or an
+// unrecognised, blank or replaced screen never receives text: the poll
+// simply times out.
 func (o *outbound) waitBlockedField(ctx context.Context, key domain.Key, kb keyboard) bool {
 	for i := 0; i < blockedFieldPolls; i++ {
 		select {
@@ -1192,9 +1208,20 @@ func (o *outbound) waitBlockedField(ctx context.Context, key domain.Key, kb keyb
 			return false
 		case <-time.After(blockedFieldDelay):
 		}
-		if !o.blockedDialogStillOpen(ctx, key, kb) {
-			return true
+		screen, err := o.herdr.ReadScreen(ctx, key.PaneID, domain.ScreenDetection, blockedLines)
+		if err != nil {
+			continue
 		}
+		text := o.clean(key, screen.Text)
+		d := domain.ParseDialog(text)
+		if d.TextEntry != 0 && sameChoices(d, kb) {
+			continue // still the dialog
+		}
+		if strings.Contains(text, "❯") {
+			return true // the input box is visible
+		}
+		// Neither the old dialog nor an input box: keep polling; the
+		// screen never receives text without the box.
 	}
 	return false
 }

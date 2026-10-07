@@ -303,6 +303,28 @@ option of the Posts group:
   gets the screen. The conversation id and the path are used for that one
   lookup and never stored or logged. The transcript is read from the
   daemon's own home directory; a moved `~/.gemini` is not followed.
+  For Pi (`pi`), Herdr's Pi integration reports the pane's session file
+  itself as `agent_session` (`kind` `path`), and the daemon opens exactly
+  that file; it never picks a file by working directory, where two Pi panes
+  would collide. The path must be absolute, clean and end in `.jsonl`, a
+  link in place of the file is refused, and the file's first line must be a
+  Pi session header, so a path to any other file yields nothing. Because the
+  path comes from Pi, `PI_CODING_AGENT_DIR`, `--session-dir` and
+  `--session <path>` work as they are. A Pi session is a tree: the daemon
+  follows the active branch from the last line back through each entry's
+  parent, so after `/tree` it never posts an answer from the abandoned
+  branch. Within the same 4 MiB budget it posts the newest assistant
+  message that ended the turn (no tool call, stop reason `stop` or
+  `length`); thinking and the commentary Pi writes next to a tool call are
+  never posted. When the newest message is a tool call, a tool result, a new
+  prompt or a half-written line, the turn is still running and the done post
+  waits and reads again, as for OpenCode; a turn that ended in an error or
+  was aborted gets the screen, which shows Pi's message. `/new`, `/resume`
+  and `/fork` in Pi report the new file, and a pane whose session no longer
+  matches the topic gets the screen. Without the integration
+  (`herdr integration install pi`), with `--no-session`, outside the TUI, or
+  before the first message (Pi creates the file then) the screen is posted.
+  The path is used for that one lookup and never stored or logged.
 - **Formatted** (default): the same reply rendered for Telegram: headings become bold,
   `- ` lists become `•`, quotes get a bar, `[text](url)` becomes a link,
   inline code and fenced blocks keep their monospace, pipe tables are
@@ -310,8 +332,8 @@ option of the Posts group:
   are split and stop after five messages with `… (+N chars)` at the end.
   Should Telegram reject the markup (`can't parse entities`), that part is
   sent once more as a plain code block and the log says so. An agent with
-  no readable reply (any kind other than Claude Code, Codex, OpenCode and
-  Antigravity,
+  no readable reply (any kind other than Claude Code, Codex, OpenCode,
+  Antigravity and Pi,
   or a missing or stale transcript) gets the screen post instead.
 
 `Formatted` has been the default since 2026-10-01; before that it was
@@ -330,11 +352,14 @@ excluded) and how many output tokens it wrote (summed once per API
 response). A part the transcript does not know is left out; nothing known
 means no line. There is no cost: Claude Code writes the cost once at the
 end of the session, not per turn, and a price table would drift from what
-the status line shows. Claude Code, OpenCode, Codex and Antigravity only (for OpenCode the
+the status line shows. Claude Code, OpenCode, Codex, Antigravity and Pi only (for OpenCode the
   edited files are distinct paths from completed `edit` and `write` tools; for
 Codex the line has the duration, the model and the output tokens, but no files,
 as its rollout does not name them reliably; for Antigravity the line has the
-duration only, as its transcript names neither the model nor the files): a pane of another kind, a
+duration only, as its transcript names neither the model nor the files; for
+Pi the line has the duration, the model, the distinct paths of the turn's
+`edit` and `write` tool calls and the output tokens summed over the turn's
+assistant messages): a pane of another kind, a
   pane without a working directory or one without a transcript directory
 posts as before and the log says why at debug (`turn meta unavailable`). In `Screen` mode
 the transcript is read for the line alone. A transcript last written
@@ -355,10 +380,10 @@ never folds. `Screen` posts are never folded, whatever the option says.
 Limits worth knowing: two Claude Code panes in the same directory cannot be
 told apart, so the reply of the one that wrote last wins (the stale check
 above catches the case where the other pane wrote before this turn began);
-other agents (Pi, Gemini, Muse) always get the screen; when no transcript or no
+other agents (Gemini, Muse, OMP) always get the screen; when no transcript or no
 text is found the daemon posts the screen and logs `reply source
 unavailable` with a safe category. Blocked posts are never affected: the dialog
-with its buttons exists only on the screen. For an idle or done OpenCode, Codex or Antigravity agent,
+with its buttons exists only on the screen. For an idle or done OpenCode, Codex, Antigravity or Pi agent,
 a bare `/screen` tries the current session reply, rendered like `Formatted`,
 whatever `Done post` says. It falls back to the screen when the reply is
 unavailable, empty, or stale. The reply stops after five Telegram messages

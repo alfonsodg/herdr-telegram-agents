@@ -16,6 +16,10 @@ var (
 	// ErrAgentBusy means Herdr cannot read alternate-screen history while
 	// the targeted agent is working.
 	ErrAgentBusy = errors.New("agent is busy")
+	// ErrAgentBlocked means Herdr refused a prompt because the agent waits
+	// at an approval or question dialog; text is never typed into one
+	// blind, only through a verified free-text entry.
+	ErrAgentBlocked = errors.New("agent is blocked")
 	// ErrTopicGone means the Telegram topic was deleted.
 	ErrTopicGone = errors.New("topic is gone")
 	// ErrTopicClosed means the Telegram topic is closed and rejects writes.

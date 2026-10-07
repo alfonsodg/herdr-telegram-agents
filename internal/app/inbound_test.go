@@ -1296,12 +1296,16 @@ func TestInboundTypedTextAfterTextEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.tg.Reset()
-	// A short reply that would be a key press goes through as text.
+	// A short reply that would be a key press goes through as text, typed
+	// into the box the ✏️ flow already opened.
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 7, "y")); err != nil {
 		t.Fatal(err)
 	}
-	if prompts := f.herdr.Prompts(); len(prompts) != 1 || prompts[0] != "p1: y" {
-		t.Fatalf("Prompts = %q", prompts)
+	if texts := f.herdr.Texts(); len(texts) != 1 || texts[0] != "p1: y" {
+		t.Fatalf("Texts = %q", texts)
+	}
+	if prompts := f.herdr.Prompts(); len(prompts) != 0 {
+		t.Fatalf("agent.prompt used while blocked: %q", prompts)
 	}
 	if keys := f.herdr.Keys(); len(keys) != 1 || keys[0].Keys[0] != "4" {
 		t.Fatalf("Keys = %+v", keys)
@@ -1669,18 +1673,124 @@ func TestInboundAttachmentAgentGoneAfterDownload(t *testing.T) {
 	}
 }
 
-func TestInboundAttachmentWhileBlockedIsStillPrompt(t *testing.T) {
+// TestInboundAttachmentWhileBlockedTypesIntoTheDialog: an attachment to a
+// blocked agent repeats the ✏️ flow automatically when the dialog has a
+// free-text entry, and its caption + paths go into the box.
+func TestInboundAttachmentWhileBlockedTypesIntoTheDialog(t *testing.T) {
 	f := newBridgeFixture(t)
-	f.add(t, "p1", "t1", "reviewer", domain.StatusBlocked)
+	blockedWithDialog(t, f, dialogScreen)
+	f.herdr.SetScreenAfterKeys("4", "ready\n❯ ")
 	f.tg.SetFile("p", []byte("x"))
 	if err := f.in.HandleAttachment(f.ctx, attachment(101, 91, domain.AttachmentVoice, "p", "", "y", 1)); err != nil {
 		t.Fatal(err)
 	}
-	if prompts := f.herdr.Prompts(); len(prompts) != 1 || !strings.HasPrefix(prompts[0], "p1: y\n\n") {
-		t.Fatalf("Prompts = %q", prompts)
+	if keys := f.herdr.Keys(); len(keys) != 1 || keys[0].Keys[0] != "4" {
+		t.Fatalf("Keys = %+v", keys)
+	}
+	if texts := f.herdr.Texts(); len(texts) != 1 || !strings.HasPrefix(texts[0], "p1: y\n\n") {
+		t.Fatalf("Texts = %q", texts)
+	}
+	if prompts := f.herdr.Prompts(); len(prompts) != 0 {
+		t.Fatalf("agent.prompt used while blocked: %q", prompts)
+	}
+}
+
+// TestInboundPromptWhileBlockedTypesIntoTheDialog: a message to a blocked
+// agent repeats the ✏️ flow automatically when the dialog has a free-text
+// entry: choose the entry, wait for the text box, type and submit, then
+// mark the keyboard.
+func TestInboundPromptWhileBlockedTypesIntoTheDialog(t *testing.T) {
+	f := newBridgeFixture(t)
+	f.reactionsOn(t)
+	blockedWithDialog(t, f, dialogScreen)
+	f.herdr.SetScreenAfterKeys("4", "ready\n❯ ")
+	f.tg.Reset()
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 5, "Que sigue?")); err != nil {
+		t.Fatal(err)
+	}
+	if keys := f.herdr.Keys(); len(keys) != 1 || keys[0].Keys[0] != "4" {
+		t.Fatalf("Keys = %+v", keys)
+	}
+	if texts := f.herdr.Texts(); len(texts) != 1 || texts[0] != "p1: Que sigue?" {
+		t.Fatalf("Texts = %q", texts)
+	}
+	assertCallsEqual(t, f.tg, "buttons:1000:✅ ✏️ · Que sigue?", "react:101:5:👀")
+}
+
+const permissionDialog = `Bash command
+  rm -rf build/
+
+Do you want to proceed?
+❯ 1. Yes
+  2. Yes, and don't ask again
+  3. No, and tell Claude what to do differently`
+
+// TestInboundPromptWhileBlockedWithoutTextEntryPostsHint: a permission
+// dialog has no free-text entry, so nothing is typed (an Enter would
+// confirm the highlighted option) and the reply says the message was not
+// sent.
+func TestInboundPromptWhileBlockedWithoutTextEntryPostsHint(t *testing.T) {
+	f := newBridgeFixture(t)
+	blockedWithDialog(t, f, permissionDialog)
+	f.tg.Reset()
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 5, "Que sigue?")); err != nil {
+		t.Fatal(err)
 	}
 	if n := len(f.herdr.Keys()); n != 0 {
-		t.Fatalf("caption sent as keys: %d", n)
+		t.Fatalf("keys sent for a permission dialog: %+v", f.herdr.Keys())
+	}
+	if n := len(f.herdr.Texts()); n != 0 {
+		t.Fatalf("text typed into a permission dialog: %q", f.herdr.Texts())
+	}
+	sent := f.tg.Sent()
+	last := sent[len(sent)-1]
+	if !strings.Contains(last.Text, "waiting at a dialog") || last.ReplyTo != 5 {
+		t.Fatalf("hint = %+v", last)
+	}
+}
+
+// TestInboundPromptWhileBlockedDialogChangedPostsHint: the dialog on screen
+// no longer matches the one behind the keyboard, so nothing is typed.
+func TestInboundPromptWhileBlockedDialogChangedPostsHint(t *testing.T) {
+	f := newBridgeFixture(t)
+	blockedWithDialog(t, f, dialogScreen)
+	f.herdr.SetScreen("p1", secondDialog)
+	f.tg.Reset()
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 5, "Que sigue?")); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(f.herdr.Keys()); n != 0 {
+		t.Fatalf("keys sent after the dialog changed: %+v", f.herdr.Keys())
+	}
+	if n := len(f.herdr.Texts()); n != 0 {
+		t.Fatalf("text typed after the dialog changed: %q", f.herdr.Texts())
+	}
+	sent := f.tg.Sent()
+	if last := sent[len(sent)-1]; !strings.Contains(last.Text, "waiting at a dialog") {
+		t.Fatalf("hint = %+v", last)
+	}
+}
+
+// TestInboundPromptBlockedGuardNeverTypesBlind: when agent.prompt answers
+// agent_blocked (the status flipped between routing and delivery), the
+// message follows the same rule: nothing is typed without a verified text
+// entry, and the hint is posted.
+func TestInboundPromptBlockedGuardNeverTypesBlind(t *testing.T) {
+	f := newBridgeFixture(t)
+	f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	f.herdr.FailNext("prompt", domain.ErrAgentBlocked)
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 5, "Que sigue?")); err != nil {
+		t.Fatal(err)
+	}
+	if texts := f.herdr.Texts(); len(texts) != 0 {
+		t.Fatalf("blind typing after agent_blocked: %q", texts)
+	}
+	if prompts := f.herdr.Prompts(); len(prompts) != 1 {
+		t.Fatalf("Prompts = %q", prompts)
+	}
+	sent := f.tg.Sent()
+	if last := sent[len(sent)-1]; !strings.Contains(last.Text, "waiting at a dialog") {
+		t.Fatalf("hint = %+v", last)
 	}
 }
 

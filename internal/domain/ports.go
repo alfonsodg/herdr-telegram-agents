@@ -41,6 +41,10 @@ type HerdrGateway interface {
 	ReadScreen(ctx context.Context, target string, source ScreenSource, lines int) (Screen, error)
 	// Prompt types text into the agent and submits it.
 	Prompt(ctx context.Context, target, text string) error
+	// SendText types literal text into the pane and submits it with Enter:
+	// the way into a dialog's text box, where Prompt is refused
+	// (agent_blocked).
+	SendText(ctx context.Context, target, text string) error
 	// SendKeys sends raw key names such as "enter" or "escape".
 	SendKeys(ctx context.Context, target string, keys []string) error
 	// Rename sets the agent name; nil clears it back to the default.

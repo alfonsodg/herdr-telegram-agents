@@ -246,6 +246,16 @@ func (g *Gateway) SendKeys(ctx context.Context, target string, keys []string) er
 	return g.call(ctx, "agent.send_keys", target, sendKeysParams{Target: target, Keys: keys}, nil)
 }
 
+// SendText types literal text into the pane and presses Enter. It is the
+// way into a dialog's text box: agent.prompt refuses a blocked agent
+// (agent_blocked) before sending any input.
+func (g *Gateway) SendText(ctx context.Context, target, text string) error {
+	if err := g.call(ctx, "pane.send_text", target, sendTextParams{PaneID: target, Text: text}, nil); err != nil {
+		return err
+	}
+	return g.call(ctx, "agent.send_keys", target, sendKeysParams{Target: target, Keys: []string{domain.KeyEnter}}, nil)
+}
+
 // Focus brings the agent's pane to the front in Herdr.
 func (g *Gateway) Focus(ctx context.Context, target string) error {
 	return g.call(ctx, "agent.focus", target, focusParams{Target: target}, nil)
@@ -390,6 +400,9 @@ func translateCallErr(method string, err error) error {
 	}
 	if apiErr.Code == codeNotIdle {
 		return fmt.Errorf("herdr %s: %w: %w", method, domain.ErrAgentBusy, apiErr)
+	}
+	if apiErr.Code == codeAgentBlocked {
+		return fmt.Errorf("herdr %s: %w: %w", method, domain.ErrAgentBlocked, apiErr)
 	}
 	if apiErr.Code == codeNotFound {
 		return fmt.Errorf("herdr %s: %w", method, domain.ErrAgentGone)

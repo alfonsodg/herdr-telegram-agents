@@ -299,6 +299,25 @@ func TestGatewayPromptAndSendKeys(t *testing.T) {
 	}
 }
 
+func TestGatewaySendText(t *testing.T) {
+	s := testkit.NewNDJSONServer(t, nil)
+	s.Handle("pane.send_text", ackHandler)
+	s.Handle("agent.send_keys", ackHandler)
+	g := newGateway(t, s)
+
+	if err := g.SendText(ctxT(t), "w1:p1", "que sigue?"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	want := map[string]any{"pane_id": "w1:p1", "text": "que sigue?"}
+	if got := lastParams(t, s, "pane.send_text"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("send_text params = %v, want %v", got, want)
+	}
+	want = map[string]any{"target": "w1:p1", "keys": []any{"enter"}}
+	if got := lastParams(t, s, "agent.send_keys"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("enter params = %v, want %v", got, want)
+	}
+}
+
 func TestGatewayFocus(t *testing.T) {
 	s := testkit.NewNDJSONServer(t, nil)
 	s.Handle("agent.focus", ackHandler)
@@ -447,6 +466,24 @@ func TestGatewayAgentNotIdleMapsBusyAndPreservesAPIError(t *testing.T) {
 	apiErr = nil
 	if !errors.As(err, &apiErr) || apiErr.Code != "invalid_params" || apiErr.Message != apiMessage {
 		t.Fatalf("err = %v, want unchanged invalid_params APIError", err)
+	}
+}
+
+func TestGatewayAgentBlockedMapsSentinel(t *testing.T) {
+	s := testkit.NewNDJSONServer(t, nil)
+	const apiMessage = "agent w1:p1 is blocked and requires interactive input"
+	s.Handle("agent.prompt", func(id string, params json.RawMessage) (any, *testkit.APIError) {
+		return nil, &testkit.APIError{Code: codeAgentBlocked, Message: apiMessage}
+	})
+	g := newGateway(t, s)
+
+	err := g.Prompt(ctxT(t), "w1:p1", "que sigue?")
+	if !errors.Is(err, domain.ErrAgentBlocked) {
+		t.Fatalf("err = %v, want ErrAgentBlocked", err)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != codeAgentBlocked || apiErr.Message != apiMessage {
+		t.Fatalf("err = %v, want APIError %s with original message", err, codeAgentBlocked)
 	}
 }
 

@@ -65,6 +65,8 @@ type FakeHerdr struct {
 	watches    [][]string
 	notifies   []Notification
 	prompts    []string
+	texts      []string
+	afterKeys  map[string]string
 	screens    map[string]string
 	revisions  map[string]int64
 	reads      []ReadCall
@@ -294,6 +296,25 @@ func (f *FakeHerdr) Prompts() []string {
 	return append([]string(nil), f.prompts...)
 }
 
+// Texts returns every SendText call as "<target>: <text>".
+func (f *FakeHerdr) Texts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.texts...)
+}
+
+// SetScreenAfterKeys makes the next SendKeys call carrying key switch the
+// target's screen to text, so a test can simulate the screen changing once
+// the agent receives the key (a dialog giving way to its text box).
+func (f *FakeHerdr) SetScreenAfterKeys(key, text string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.afterKeys == nil {
+		f.afterKeys = map[string]string{}
+	}
+	f.afterKeys[key] = text
+}
+
 func (f *FakeHerdr) ListAgents(context.Context) ([]domain.Agent, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -327,10 +348,24 @@ func (f *FakeHerdr) Prompt(_ context.Context, target, text string) error {
 	return f.fail("prompt")
 }
 
+func (f *FakeHerdr) SendText(_ context.Context, target, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.texts = append(f.texts, target+": "+text)
+	f.log.Debug("fake herdr send_text", slog.String("target", target), slog.Int("len", len(text)))
+	return f.fail("send_text")
+}
+
 func (f *FakeHerdr) SendKeys(_ context.Context, target string, keys []string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.keys = append(f.keys, KeysCall{Target: target, Keys: append([]string(nil), keys...)})
+	for _, k := range keys {
+		if text, ok := f.afterKeys[k]; ok {
+			f.screens[target] = text
+			delete(f.afterKeys, k)
+		}
+	}
 	f.log.Debug("fake herdr send_keys", slog.String("target", target), slog.Any("keys", keys))
 	return f.fail("keys")
 }

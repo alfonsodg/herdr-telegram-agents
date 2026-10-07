@@ -176,6 +176,13 @@ type sendKeysParams struct {
 	Keys   []string `json:"keys"`
 }
 
+// sendTextParams mirrors pane.send_text, which takes the pane id rather
+// than the agent target.
+type sendTextParams struct {
+	PaneID string `json:"pane_id"`
+	Text   string `json:"text"`
+}
+
 type focusParams struct {
 	Target string `json:"target"`
 }

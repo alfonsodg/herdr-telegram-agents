@@ -126,6 +126,11 @@ const (
 	typingTimeout = 10 * time.Minute
 	// typingHeadRunes is how much of the typed text the ✅ ✏️ button shows.
 	typingHeadRunes = 30
+	// blockedFieldPolls and blockedFieldDelay bound the wait for a dialog's
+	// text box to open after its free-text entry is chosen: text is typed
+	// only once the dialog gave way to the box.
+	blockedFieldPolls = 8
+	blockedFieldDelay = 150 * time.Millisecond
 	// turnStartSlack forgives the gap between the real start of a turn and
 	// the moment the daemon sees the working status (and second-precision
 	// transcript timestamps) when judging whether a reply belongs to the

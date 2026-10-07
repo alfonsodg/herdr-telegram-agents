@@ -229,14 +229,17 @@ option of the Posts group:
   subagent traffic. The text is posted as a code block, so Markdown shows as
   the agent typed it. For OpenCode, which keeps its sessions in a database
   rather than a file per session, the daemon asks Herdr for the pane's
-  `agent_session` at read time and runs `opencode session export <session id>`
-  on OpenCode 2.x, falling back to `opencode export <session id>` on 1.x (the
-  `opencode` binary on `PATH`, one shared 10 s timeout, 16 MiB stdout cap per
-  attempt): the reply is
+  `agent_session` at read time. On OpenCode 2.x the daemon reads the rows
+  since the last user message from opencode's own database
+  (`~/.local/share/opencode/opencode.db`, through the `sqlite3` binary on its
+  `PATH`, read-only, one indexed query bounded at 5 s): the reply is
   every text part the agent wrote after your last prompt, joined in order,
-  skipping reasoning, tool calls and patches. The export is read through a
-  private temporary file, because the CLI silently truncates piped stdout at
-  64 KiB multiples while still exiting zero. The session value is used for
+  skipping reasoning, tool calls and patches. When the database or `sqlite3`
+  is unavailable, it falls back to `opencode session export <session id>`
+  (`opencode export <session id>` on 1.x) with the `opencode` binary on
+  `PATH`, one shared 10 s timeout and a 16 MiB stdout cap per attempt, read
+  through a private temporary file because the CLI silently truncates piped
+  stdout at 64 KiB multiples while still exiting zero. The session value is used for
   that one lookup and never stored or logged. The pane must have a complete
   session identity matching the topic; after a session change, the screen is
   posted until Herdr reconciles the new identity. Export stderr is discarded;
@@ -332,7 +335,9 @@ the transcript is read for the line alone. A transcript last written
 before the turn's first `working` status belongs to an earlier turn (two
 Claude panes in one directory): its line is skipped and, in `Reply` /
 `Formatted` mode, the screen is posted instead with `stale transcript` in
-the `reply source unavailable` line.
+the `reply source unavailable` line. The daemon sees that first `working`
+status a beat after the agent began, so a reply written up to a few seconds
+before it still counts as this turn's.
 
 Long `Reply` and `Formatted` posts can arrive **folded** (`Fold long
 replies after` in the Posts group, default `20 lines`): every message part

@@ -297,36 +297,39 @@ Status on 2026-09-30: race tests, vet, staticcheck, formatting/import checks and
 all five platform build/vet targets passed. An approved recipient completed
 registration and an owner confirmed Read access. The recipient confirmed on a
 phone that the agent/service topics are visible and `/screen` works. Exact client
-version was not supplied. The remaining phone/Desktop checks below are pending;
-notification/navigation parity is not established. Record client versions and
-outcomes only, without tokens or private conversation content.
+version was not supplied.
 
-- [ ] Enable private Topics in BotFather; check that disabled capability refuses
+Status on 2026-10-07: the owner ran the remaining checks below on real phone and
+Desktop clients and reported them passed (#21). Client versions were not
+recorded. Record client versions and outcomes only, without tokens or private
+conversation content.
+
+- [x] Enable private Topics in BotFather; check that disabled capability refuses
   a grant while owner-group operation continues.
-- [ ] Send a fresh private message, find the numeric recipient in `/share`, and
+- [x] Send a fresh private message, find the numeric recipient in `/share`, and
   grant Read. Check that its contents were not forwarded and no old output was
   replayed. Repeat with duplicate display names and more than ten contacts.
-- [ ] On phone and Desktop, verify the first topic, icon and access card. Change
+- [x] On phone and Desktop, verify the first topic, icon and access card. Change
   name/icon repeatedly; confirm propagation before notices disappear after
   20 seconds. Repeat with Keep, and verify pin and creation notices.
-- [ ] Check `/agents`, its buttons, scoped command menu and navigation fallback.
+- [x] Check `/agents`, its buttons, scoped command menu and navigation fallback.
   A second recipient must see only their own grants. Remove the last grant and
   verify that agent commands disappear from the menu.
-- [ ] Confirm Read cannot prompt, press control buttons, upload to the agent or
+- [x] Confirm Read cannot prompt, press control buttons, upload to the agent or
   invoke `/usage`. Test Control, repository-read, close confirmation and focus
   separately. Unknown commands and global administration remain refused.
-- [ ] Exercise prompts, attachments, albums, blocked questions, multi-select and
+- [x] Exercise prompts, attachments, albums, blocked questions, multi-select and
   text entry while the owner and another controller also act.
-- [ ] Check one blocked alert, silent done output, local silent/pause/resume,
+- [x] Check one blocked alert, silent done output, local silent/pause/resume,
   owner desk presence, global sync-off and actual client sound/mute behavior.
-- [ ] Revoke during an attachment download and a queued response. Try old
+- [x] Revoke during an attachment download and a queued response. Try old
   buttons again. Check the neutral access notice and retained history.
-- [ ] Block/unblock the bot, exit/resume the same session, replace the session
+- [x] Block/unblock the bot, exit/resume the same session, replace the session
   in its pane, and restart with incomplete identity. No unapproved reassociation
   or duplicate topic should occur.
-- [ ] Test a missing topic and an ambiguous creation result. Verify explicit
+- [x] Test a missing topic and an ambiguous creation result. Verify explicit
   repair; check the chat for orphan topics before retrying.
-- [ ] Verify owner setup, observers, pager, options/update panel and shutdown
+- [x] Verify owner setup, observers, pager, options/update panel and shutdown
   both with sharing unavailable and with active private mirrors.
 
 ## See Also

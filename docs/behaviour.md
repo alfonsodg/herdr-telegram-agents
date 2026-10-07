@@ -434,7 +434,7 @@ The options today:
 |--------|-------|--------------|
 | `Herdr → Telegram sync` | Sync | Default on. Off: the daemon creates, edits and closes no topic and posts no screen until it is on again. Messages, keys, `/screen`, `/status` and presses on existing question buttons keep working, the screen capture keeps running, daemon notices keep posting. Back on: a full resync, like the `resync` action. A daemon that starts with sync off says so in its started notice, in the `/status` header (`🔇 …`), in the `status` action line (`sync=off`) and in the log. |
 | `Dashboard in General` | Sync | Default on. One pinned message in General, edited in place and never ringing: every live agent (up to 40, then `… +N more`) with its status, how long it has been in it and a link to its topic, `updated HH:MM` at the bottom. Off unpins and deletes it. See [The dashboard](#the-dashboard). |
-| `Quiet while at the desk` | Quiet | Default off: every topic edit and screen post goes out at once, sounds included, so a fresh install shows the plugin at work. On: while you are at the desk, topic edits wait and screen posts are silent; everything catches up when you leave. macOS and Windows only: Linux has no idle source yet. Off means no presence check at all; `/away` and `/here` then answer that quiet mode is off. See [Quiet while at the desk](#quiet-while-at-the-desk). |
+| `Quiet while at the desk` | Quiet | Default off: every topic edit and screen post goes out at once, sounds included, so a fresh install shows the plugin at work. On: while you are at the desk, topic edits wait and screen posts are silent; everything catches up when you leave. Automatic on macOS and Windows; on Linux it asks Mutter, the freedesktop ScreenSaver or `xprintidle`, and `/here` turns quiet on by hand where none answers. Off means no presence check at all; `/away` and `/here` then answer that quiet mode is off. See [Quiet while at the desk](#quiet-while-at-the-desk). |
 | `Away after` | Quiet | Default 3 min. Minutes without keyboard or mouse input on this machine before you count as away. A value outside the picker's list (say `45`) can be typed into `options.json` by hand. |
 | `Hold topic edits` | Quiet | Default on. While at the desk no topic is created, renamed, closed, reopened or given a new icon; each of those is a Telegram service message that rings the phone. Off keeps topic edits live while at the desk. |
 | `Screen posts` | Quiet | Default `Silent`. What happens to blocked and done screens while at the desk: `Silent` posts without a sound (Telegram still shows a silent banner), `Held` posts nothing until you leave, `Normal` posts as usual. |
@@ -591,11 +591,12 @@ you can see the plugin working. Tick `Quiet while at the desk` in
 `/options` → Quiet once the service messages ring too often.
 
 - **Presence** is the machine's input idle time, sampled every 10 seconds:
-  `ioreg` (`HIDIdleTime`) on macOS, `GetLastInputInfo` on Windows. Idle
-  shorter than `Away after` means at the desk. Linux has no source yet: the
-  automatic verdict there is always "away", so quiet mode never engages,
-  the daemon logs one warning at start and `/away` answers that quiet mode
-  is not available on this platform. Herdr's own pane focus is not used:
+  `ioreg` (`HIDIdleTime`) on macOS, `GetLastInputInfo` on Windows and, on
+  Linux, GNOME's Mutter idle monitor, the freedesktop ScreenSaver time or
+  `xprintidle`. Idle shorter than `Away after` means at the desk. Where no
+  source answers (headless sessions, KDE Wayland today) the daemon logs one
+  warning, retries once a minute in case one appears, and `/here` turns
+  quiet on by hand until `/away`. Herdr's own pane focus is not used:
   another pane's agent would ring while you sit in front of it.
 - **While at the desk** (quiet on): the reconciler defers every topic write
   (create, icon, name, close, reopen) and logs `reconcile deferred: operator

@@ -161,3 +161,20 @@ func TestOutboundPendingReplyForget(t *testing.T) {
 		t.Fatalf("Forget kept the retry: state %v, timers %d", f.out.pendingReplies, f.out.deb.Pending())
 	}
 }
+
+// TestOutboundPendingReplyDoneThenIdle: a done turn whose reply is pending
+// still posts it when the operator looks at the pane during the wait (Herdr
+// turns done into idle once the pane is seen): the retry belongs to a turn
+// that already ended.
+func TestOutboundPendingReplyDoneThenIdle(t *testing.T) {
+	f, a := pendingReplyFixture(t, domain.DoneFormatted)
+	f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusDone)})
+	f.fire(t, 1)
+	f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusIdle)})
+	f.replies.Set(a.Key, "seen answer")
+	f.fireAfter(t, replyPendingDelay, 1)
+	assertCallsEqual(t, f.tg, "react:101:2:👀", "react:101:2:👌", "send:101:seen answer:markdown")
+	if len(f.out.pendingReplies) != 0 {
+		t.Fatalf("retry state left: %v", f.out.pendingReplies)
+	}
+}

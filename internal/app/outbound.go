@@ -111,7 +111,6 @@ type pendingReply struct {
 	attempts int
 	t        turn
 	hasTurn  bool
-	idle     bool
 }
 
 // pendingCapture is the first screen of a question kept while the blocked
@@ -550,7 +549,12 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompleti
 		return o.skip(key, "exited")
 	}
 	status := agent.Status
-	if (idleCompletion || retrying && retry.idle) && status == domain.StatusIdle {
+	// A retry belongs to a turn that already ended: done turns into idle
+	// once the operator looks at the pane, and that must not drop the post.
+	if (idleCompletion || retrying) && status == domain.StatusIdle {
+		if retrying && !idleCompletion {
+			o.log.Debug("[FIX] pending reply retried on an idle pane", slog.String("key", key.String()), slog.Int("attempt", retry.attempts))
+		}
 		status = domain.StatusDone
 	}
 	// A done status ends the turn here, before any reason to skip the
@@ -680,7 +684,7 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompleti
 		// times; the screen mode only loses its footer, as on any failure.
 		pending := errors.Is(err, domain.ErrReplyPending) && mode != domain.DoneScreen
 		if pending && retry.attempts < replyPendingRetries {
-			o.pendingReplies[key] = pendingReply{attempts: retry.attempts + 1, t: t, hasTurn: hasTurn, idle: idleCompletion || retry.idle}
+			o.pendingReplies[key] = pendingReply{attempts: retry.attempts + 1, t: t, hasTurn: hasTurn}
 			o.deb.ScheduleAfter(key, replyPendingDelay)
 			o.log.Debug("reply pending, retry scheduled", slog.String("key", key.String()), slog.Int("attempt", retry.attempts+1),
 				slog.Int("max", replyPendingRetries), slog.Int64("delay_ms", replyPendingDelay.Milliseconds()), slog.String("mode", string(mode)))

@@ -1162,7 +1162,8 @@ func TestDaemonAwayCommandAndQuietOption(t *testing.T) {
 	}
 	// /here returns to the automatic verdict: quiet again.
 	f.tg.Push(domain.GeneralCommand{MessageID: 10, FromID: 1, Text: "/here"})
-	f.tick(t, "quiet after /here", func() bool { return f.daemon.Stats().Quiet == "on" })
+	// The verdict flips before the reply is sent: wait for both.
+	f.tick(t, "quiet after /here", func() bool { return f.daemon.Stats().Quiet == "on" && len(f.tg.Sent()) == 3 })
 	if sent := f.tg.Sent(); len(sent) != 3 || sent[2].Text != "🖥 presence is automatic again: at the desk, quiet on" {
 		t.Fatalf("/here reply = %+v", sent)
 	}

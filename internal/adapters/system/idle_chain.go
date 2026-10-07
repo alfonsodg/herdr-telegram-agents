@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
+	"path"
 	"strings"
 	"time"
 
@@ -94,7 +94,9 @@ func linuxProbes(lookup Lookup, lookPath func(string) (string, error), stat func
 		if !ok || dir == "" {
 			return false
 		}
-		_, err := stat(filepath.Join(dir, "bus"))
+		// XDG_RUNTIME_DIR is a Linux path: join with "/" on every OS, so
+		// the chain behaves the same in tests on Windows.
+		_, err := stat(path.Join(dir, "bus"))
 		return err == nil
 	}
 	return []idleProbe{

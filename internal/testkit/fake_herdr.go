@@ -65,6 +65,7 @@ type FakeHerdr struct {
 	watches    [][]string
 	notifies   []Notification
 	prompts    []string
+	texts      []string
 	screens    map[string]string
 	revisions  map[string]int64
 	reads      []ReadCall
@@ -294,6 +295,13 @@ func (f *FakeHerdr) Prompts() []string {
 	return append([]string(nil), f.prompts...)
 }
 
+// Texts returns every SendText call, in order, as "target: text".
+func (f *FakeHerdr) Texts() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.texts...)
+}
+
 func (f *FakeHerdr) ListAgents(context.Context) ([]domain.Agent, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -325,6 +333,14 @@ func (f *FakeHerdr) Prompt(_ context.Context, target, text string) error {
 	f.prompts = append(f.prompts, target+": "+text)
 	f.log.Debug("fake herdr prompt", slog.String("target", target), slog.Int("len", len(text)))
 	return f.fail("prompt")
+}
+
+func (f *FakeHerdr) SendText(_ context.Context, target, text string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.texts = append(f.texts, target+": "+text)
+	f.log.Debug("fake herdr send_text", slog.String("target", target), slog.Int("len", len(text)))
+	return f.fail("send_text")
 }
 
 func (f *FakeHerdr) SendKeys(_ context.Context, target string, keys []string) error {

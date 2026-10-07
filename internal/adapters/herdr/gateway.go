@@ -223,6 +223,16 @@ func (g *Gateway) SendKeys(ctx context.Context, target string, keys []string) er
 	return g.call(ctx, "agent.send_keys", target, sendKeysParams{Target: target, Keys: keys}, nil)
 }
 
+// SendText types literal text into the pane and presses Enter. It is the
+// way to answer an agent waiting at a dialog: agent.prompt refuses one
+// (agent_blocked) before sending any input.
+func (g *Gateway) SendText(ctx context.Context, target, text string) error {
+	if err := g.call(ctx, "pane.send_text", target, sendTextParams{PaneID: target, Text: text}, nil); err != nil {
+		return err
+	}
+	return g.call(ctx, "agent.send_keys", target, sendKeysParams{Target: target, Keys: []string{domain.KeyEnter}}, nil)
+}
+
 // Focus brings the agent's pane to the front in Herdr.
 func (g *Gateway) Focus(ctx context.Context, target string) error {
 	return g.call(ctx, "agent.focus", target, focusParams{Target: target}, nil)

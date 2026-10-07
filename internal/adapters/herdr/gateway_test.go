@@ -261,6 +261,25 @@ func TestGatewayPromptAndSendKeys(t *testing.T) {
 	}
 }
 
+func TestGatewaySendText(t *testing.T) {
+	s := testkit.NewNDJSONServer(t, nil)
+	s.Handle("pane.send_text", ackHandler)
+	s.Handle("agent.send_keys", ackHandler)
+	g := newGateway(t, s)
+
+	if err := g.SendText(ctxT(t), "w1:p1", "que sigue?"); err != nil {
+		t.Fatalf("SendText: %v", err)
+	}
+	want := map[string]any{"pane_id": "w1:p1", "text": "que sigue?"}
+	if got := lastParams(t, s, "pane.send_text"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("send_text params = %v, want %v", got, want)
+	}
+	want = map[string]any{"target": "w1:p1", "keys": []any{"enter"}}
+	if got := lastParams(t, s, "agent.send_keys"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("enter params = %v, want %v", got, want)
+	}
+}
+
 func TestGatewayFocus(t *testing.T) {
 	s := testkit.NewNDJSONServer(t, nil)
 	s.Handle("agent.focus", ackHandler)

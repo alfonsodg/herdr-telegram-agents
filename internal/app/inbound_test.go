@@ -1044,12 +1044,16 @@ func TestInboundTypedTextAfterTextEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.tg.Reset()
-	// A short reply that would be a key press goes through as text.
+	// A short reply that would be a key press goes through as text, typed
+	// into the dialog because the agent is blocked.
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 7, "y")); err != nil {
 		t.Fatal(err)
 	}
-	if prompts := f.herdr.Prompts(); len(prompts) != 1 || prompts[0] != "p1: y" {
-		t.Fatalf("Prompts = %q", prompts)
+	if texts := f.herdr.Texts(); len(texts) != 1 || texts[0] != "p1: y" {
+		t.Fatalf("Texts = %q", texts)
+	}
+	if prompts := f.herdr.Prompts(); len(prompts) != 0 {
+		t.Fatalf("agent.prompt used while blocked: %q", prompts)
 	}
 	if keys := f.herdr.Keys(); len(keys) != 1 || keys[0].Keys[0] != "4" {
 		t.Fatalf("Keys = %+v", keys)
@@ -1417,18 +1421,38 @@ func TestInboundAttachmentAgentGoneAfterDownload(t *testing.T) {
 	}
 }
 
-func TestInboundAttachmentWhileBlockedIsStillPrompt(t *testing.T) {
+func TestInboundAttachmentWhileBlockedTypesIntoTheDialog(t *testing.T) {
 	f := newBridgeFixture(t)
 	f.add(t, "p1", "t1", "reviewer", domain.StatusBlocked)
 	f.tg.SetFile("p", []byte("x"))
 	if err := f.in.HandleAttachment(f.ctx, attachment(101, 91, domain.AttachmentVoice, "p", "", "y", 1)); err != nil {
 		t.Fatal(err)
 	}
-	if prompts := f.herdr.Prompts(); len(prompts) != 1 || !strings.HasPrefix(prompts[0], "p1: y\n\n") {
-		t.Fatalf("Prompts = %q", prompts)
+	if texts := f.herdr.Texts(); len(texts) != 1 || !strings.HasPrefix(texts[0], "p1: y\n\n") {
+		t.Fatalf("Texts = %q", texts)
 	}
 	if n := len(f.herdr.Keys()); n != 0 {
 		t.Fatalf("caption sent as keys: %d", n)
+	}
+	if prompts := f.herdr.Prompts(); len(prompts) != 0 {
+		t.Fatalf("agent.prompt used while blocked: %q", prompts)
+	}
+}
+
+// TestInboundPromptWhileBlockedTypesIntoTheDialog: Herdr refuses agent.prompt
+// for an agent waiting at a dialog (agent_blocked), so the operator's message
+// goes in as literal text plus Enter, the same as typing the answer.
+func TestInboundPromptWhileBlockedTypesIntoTheDialog(t *testing.T) {
+	f := newBridgeFixture(t)
+	f.add(t, "p1", "t1", "reviewer", domain.StatusBlocked)
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 5, "Que sigue?")); err != nil {
+		t.Fatal(err)
+	}
+	if texts := f.herdr.Texts(); len(texts) != 1 || texts[0] != "p1: Que sigue?" {
+		t.Fatalf("Texts = %q", texts)
+	}
+	if prompts := f.herdr.Prompts(); len(prompts) != 0 {
+		t.Fatalf("agent.prompt used while blocked: %q", prompts)
 	}
 }
 

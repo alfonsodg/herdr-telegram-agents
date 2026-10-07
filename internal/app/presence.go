@@ -112,7 +112,7 @@ func (p *Presence) sample(ctx context.Context) {
 	case errors.Is(err, domain.ErrIdleUnsupported):
 		p.unsupported = true
 		p.atDesk, p.sampled = false, true
-		p.log.Warn("presence: no input idle source on this platform, quiet mode stays off; /away and /here still answer")
+		p.log.Warn("presence: no input idle source on this machine, quiet mode stays off; /away and /here still answer")
 		return
 	case err != nil:
 		if !p.failing {

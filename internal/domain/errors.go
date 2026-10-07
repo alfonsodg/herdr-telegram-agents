@@ -61,9 +61,9 @@ var (
 	ErrInvalidOption = errors.New("invalid option value")
 	// ErrDuplicateIcon means two statuses would share the same topic icon.
 	ErrDuplicateIcon = errors.New("two statuses share an icon")
-	// ErrIdleUnsupported means this platform has no source for the input
+	// ErrIdleUnsupported means this machine has no source for the input
 	// idle time, so presence cannot be measured automatically.
-	ErrIdleUnsupported = errors.New("input idle time not available on this platform")
+	ErrIdleUnsupported = errors.New("no input idle source on this machine")
 	// ErrNoReply means the reply source has no last reply for the agent:
 	// unsupported agent kind, unknown working directory, no transcript, or
 	// no text after the last prompt. Wrapped with the reason; the caller

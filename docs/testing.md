@@ -276,6 +276,18 @@ on 2026-09-25. The code is also built and unit-tested on a Windows CI runner.
 - [x] A daemon that is not listening is reported as "not listening on its control channel" and `stop` escalates to a kill
 - [ ] `scripts/install.ps1` run from a checkout under a folder with brackets (for example `plugin[1]\`) installs `bin\herdr-tg.exe` with a verified checksum, and a Telegram update of that checkout succeeds (issue #19)
 
+## Linux desktop
+
+Quiet mode's Linux idle source (`internal/adapters/system/idle_chain.go`) is
+unit-tested on every OS against a fake environment; these checks need a real
+desktop. Record the distribution, desktop, session type
+(`echo $XDG_SESSION_TYPE`), and the `gdbus` and `xprintidle` versions.
+
+- [ ] **GNOME on Wayland**: tick `Quiet while at the desk`, `Away after` → `1m`; the log has `input idle source source=mutter`; typing keeps `status` at `quiet=on`; a minute without input turns it to `away` and the topics catch up
+- [ ] **X11 with `xprintidle`** (GNOME on Xorg, or another X11 desktop without gdbus on PATH): the same, with `source=mutter` on GNOME and `source=xprintidle` elsewhere
+- [ ] **Failure keeps the verdict**: while at the desk, make the source fail (rename `xprintidle` away on an X11 desktop without Mutter): one `presence sample failed, keeping the previous verdict` warning, `quiet=on` stays; restore it → `presence source recovered`
+- [ ] **No session**: start the daemon from an SSH login without `DISPLAY` and `WAYLAND_DISPLAY`: one `presence: no input idle source on this machine` warning, `/away` answers `quiet mode has no input idle source on this machine`
+
 ## Private sharing acceptance
 
 Status on 2026-09-30: race tests, vet, staticcheck, formatting/import checks and

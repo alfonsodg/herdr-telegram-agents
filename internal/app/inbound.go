@@ -88,14 +88,14 @@ const (
 	// presenceAwayUntil and presenceAwayOpen answer /away.
 	presenceAwayUntil = "🏃 away until %s, Telegram gets everything; /here returns to automatic"
 	presenceAwayOpen  = "🏃 away until /here, Telegram gets everything"
-	// presenceAwayNone answers /away where the platform has no idle source:
+	// presenceAwayNone answers /away where the machine has no idle source:
 	// quiet never engages there, so there is nothing to lift.
-	presenceAwayNone = "quiet mode is not available on this platform, Telegram already gets everything"
+	presenceAwayNone = "quiet mode has no input idle source on this machine, Telegram already gets everything"
 	// presenceHereFmt answers /here with the automatic verdict.
 	presenceHereFmt     = "🖥 presence is automatic again: %s"
 	presenceVerdictDesk = "at the desk, quiet on"
 	presenceVerdictAway = "away"
-	presenceVerdictNone = "not available on this platform"
+	presenceVerdictNone = "no input idle source on this machine"
 	// Headers of the General /status summary.
 	presenceHeaderQuiet  = "🔕 quiet: you are at the desk (/away to override)\n"
 	presenceHeaderManual = "🏃 away (manual) until %s\n"

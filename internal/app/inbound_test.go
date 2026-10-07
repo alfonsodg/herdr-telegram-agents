@@ -871,7 +871,7 @@ func TestInboundPresenceUnavailableAndTopicHint(t *testing.T) {
 	p := NewPresence(idle, f.opts, f.clock, nil)
 	f.in.SetPresence(p)
 	p.Poll(f.ctx)
-	if got := general(f, t, 2, "/here"); got != "🖥 presence is automatic again: not available on this platform" {
+	if got := general(f, t, 2, "/here"); got != "🖥 presence is automatic again: no input idle source on this machine" {
 		t.Fatalf("/here on unsupported platform = %q", got)
 	}
 	if got := general(f, t, 3, "/away 2h"); got != presenceAwayNone {

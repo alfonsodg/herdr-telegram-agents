@@ -101,6 +101,10 @@ type outbound struct {
 	// source to finish the turn (domain.ErrReplyPending); the debouncer
 	// carries the retry timer.
 	pendingReplies map[domain.Key]pendingReply
+	// unreadable counts consecutive done posts whose reply could not be
+	// read for an agent the daemon has a reader for; the notice fires once
+	// per streak and a readable reply clears the count.
+	unreadable map[domain.Key]int
 }
 
 // pendingReply is a done post fired again after replyPendingDelay. It keeps
@@ -504,6 +508,7 @@ func (o *outbound) reassociateState(from domain.Key, next domain.Agent) {
 	moveAgentState(o.refresh, from, next.Key)
 	moveAgentState(o.typing, from, next.Key)
 	moveAgentState(o.pendingReplies, from, next.Key)
+	moveAgentState(o.unreadable, from, next.Key)
 	delete(o.threads, from)
 	if hasCapture && !timerMoved {
 		o.deb.ScheduleAfter(next.Key, 0)
@@ -523,6 +528,7 @@ func (o *outbound) Forget(ctx context.Context, key domain.Key) error {
 	delete(o.captures, key)
 	delete(o.refresh, key)
 	delete(o.pendingReplies, key)
+	delete(o.unreadable, key)
 	o.endTyping(key, "exited")
 	return o.retire(ctx, key, "exited")
 }
@@ -667,7 +673,7 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompleti
 	if !captured && (mode != domain.DoneScreen || wantMeta) {
 		r, err := o.replies.LastReply(ctx, agent)
 		if err == nil && !freshReply(hasTurn, t.started, r) {
-			err = fmt.Errorf("%w: stale transcript: written %s before the turn started", domain.ErrNoReply, t.started.Sub(r.Written).Round(time.Second))
+			err = fmt.Errorf("%w: written %s before the turn started", domain.ErrStaleTranscript, t.started.Sub(r.Written).Round(time.Second))
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -697,10 +703,14 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompleti
 			mode = domain.DoneScreen
 		case err != nil && mode != domain.DoneScreen:
 			o.log.Info("reply source unavailable", slog.String("key", key.String()), slog.String("mode", string(mode)), slog.Any("err", logErr))
+			if !errors.Is(err, domain.ErrUnsupportedAgent) && !errors.Is(err, domain.ErrStaleTranscript) {
+				o.noteUnreadable(ctx, key, entry.ThreadID)
+			}
 			mode = domain.DoneScreen
 		case err != nil:
 			o.log.Debug("turn meta unavailable", slog.String("key", key.String()), slog.Any("err", logErr))
 		default:
+			delete(o.unreadable, key)
 			if mode != domain.DoneScreen {
 				reply, text = r, strings.TrimSpace(r.Text)
 			}
@@ -1477,6 +1487,33 @@ func freshReply(hasTurn bool, turnStarted time.Time, r domain.Reply) bool {
 		return true
 	}
 	return !r.Written.Before(turnStarted.Add(-turnStartSlack))
+}
+
+// noteUnreadable counts consecutive done posts whose reply could not be
+// read for an agent the daemon has a reader for. After
+// unreadableNoticeAfter in a row it posts one notice in the topic: a
+// reader that quietly stopped working (a store grown past a limit, a
+// changed format) must not degrade to screens unnoticed. A readable reply
+// clears the count. Expected fallbacks (unsupported kinds, stale
+// transcripts) never get here. The notice is diagnostic: no sound, and
+// held like every other non-question post while quiet mode is at the desk.
+func (o *outbound) noteUnreadable(ctx context.Context, key domain.Key, threadID int) {
+	if o.unreadable == nil {
+		o.unreadable = map[domain.Key]int{}
+	}
+	o.unreadable[key]++
+	if o.unreadable[key] < unreadableNoticeAfter {
+		return
+	}
+	o.unreadable[key] = 0
+	if o.quiet() && o.posts() == domain.PostsHeld {
+		return
+	}
+	if _, err := o.tg.Send(ctx, domain.Outgoing{ThreadID: threadID, Text: unreadableNotice, Notify: false}); err != nil {
+		o.log.Warn("unreadable notice failed", slog.String("key", key.String()), slog.String("err", err.Error()))
+		return
+	}
+	o.log.Warn("unreadable replies notice posted", slog.String("key", key.String()), slog.Int("thread_id", threadID))
 }
 
 // ScreenAll posts what the agent printed since the last human message: the

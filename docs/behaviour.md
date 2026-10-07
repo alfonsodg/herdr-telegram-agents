@@ -234,7 +234,13 @@ option of the Posts group:
   `opencode` binary on `PATH`, one shared 10 s timeout, 16 MiB stdout cap per
   attempt): the reply is
   every text part the agent wrote after your last prompt, joined in order,
-  skipping reasoning, tool calls and patches. The session value is used for
+  skipping reasoning, tool calls and patches. The export is read through a
+  private temporary file, because the CLI silently truncates piped stdout at
+  64 KiB multiples while still exiting zero. A read whose newest record is
+  tool work means the turn is not over: the done post posts nothing and is
+  retried after three seconds, so neither a fragment nor a screen tail
+  appears and the settled answer arrives even when no further status change
+  follows. The session value is used for
   that one lookup and never stored or logged. The pane must have a complete
   session identity matching the topic; after a session change, the screen is
   posted until Herdr reconciles the new identity. Export stderr is discarded;

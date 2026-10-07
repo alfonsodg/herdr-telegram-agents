@@ -115,6 +115,11 @@ const (
 	// back to a fragment or losing the post when no further status change
 	// follows.
 	pendingRetryDelay = 3 * time.Second
+	// turnStartSlack forgives the gap between the real start of a turn and
+	// the moment the daemon sees the working status (and second-precision
+	// transcript timestamps) when judging whether a reply belongs to the
+	// current turn.
+	turnStartSlack = 3 * time.Second
 	// gitInlineRunes is the longest /git output posted as a message; longer
 	// output goes out as a document.
 	gitInlineRunes = 3600

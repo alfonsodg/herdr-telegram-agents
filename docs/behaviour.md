@@ -231,10 +231,21 @@ option of the Posts group:
   rather than a file per session, the daemon asks Herdr for the pane's
   `agent_session` at read time and runs `opencode session export <session id>`
   on OpenCode 2.x, falling back to `opencode export <session id>` on 1.x (the
-  `opencode` binary on `PATH`, one shared 10 s timeout, 16 MiB stdout cap per
-  attempt): the reply is
+  `opencode` binary on `PATH`, one shared 10 s timeout, 16 MiB export cap per
+  attempt). OpenCode cuts its output at 64 KiB when it goes into a pipe, so
+  each export goes into a private file (0600) under the plugin's state
+  directory, `tmp/opencode-export-*.json`, which is read back and removed
+  at once; files a crashed daemon left there are removed at the next start.
+  The reply is
   every text part the agent wrote after your last prompt, joined in order,
-  skipping reasoning, tool calls and patches. The session value is used for
+  skipping reasoning, tool calls and patches. OpenCode reports done at
+  every step of a turn, so a read whose newest record is a tool call is a
+  turn still running: in `Reply` and `Formatted` mode the done post waits
+  and reads again up to 3 times, 5 s apart, and posts the screen if the
+  turn still has not finished (log `reply still pending, screen posted`).
+  The real end of the turn usually arrives first as a new done event. A new
+  turn or a question in the meantime drops the wait. `Screen` mode posts at
+  once; an unfinished turn only leaves out the summary line. The session value is used for
   that one lookup and never stored or logged. The pane must have a complete
   session identity matching the topic; after a session change, the screen is
   posted until Herdr reconciles the new identity. Export stderr is discarded;

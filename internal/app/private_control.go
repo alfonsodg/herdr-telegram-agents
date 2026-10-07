@@ -138,7 +138,7 @@ func (p *PrivateControl) Handle(ctx context.Context, e domain.PrivateMessage) er
 	case domain.CmdInterrupt:
 		return p.keys(ctx, o, []string{domain.KeyInterrupt})
 	case domain.CmdForward:
-		if a.Kind != "claude" {
+		if a.Kind != domain.ClaudeKind {
 			return p.send(ctx, o, "This command is supported only for Claude Code.")
 		}
 		if cmd.Text == "/clear" && a.Status != domain.StatusIdle && a.Status != domain.StatusDone {

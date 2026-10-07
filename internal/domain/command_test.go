@@ -178,6 +178,16 @@ func TestForwardWords(t *testing.T) {
 	}
 }
 
+// TestDismissesOverlay: only Claude Code overlays get the automatic esc;
+// a Codex or OpenCode picker stays open for /keys.
+func TestDismissesOverlay(t *testing.T) {
+	for kind, want := range map[string]bool{"claude": true, "Claude": true, "codex": false, "opencode": false, "gemini": false, "": false} {
+		if got := domain.DismissesOverlay(kind); got != want {
+			t.Errorf("DismissesOverlay(%q) = %v, want %v", kind, got, want)
+		}
+	}
+}
+
 func TestCutOverlay(t *testing.T) {
 	rule := "▔▔▔▔▔▔▔▔▔▔▔▔"
 	tests := []struct {

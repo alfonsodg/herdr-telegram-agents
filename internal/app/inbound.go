@@ -43,6 +43,9 @@ const (
 	// stoppedReply and interruptedReply confirm the key went out.
 	stoppedReply     = "⏹ sent esc"
 	interruptedReply = "⛔ sent ctrl+c"
+	// pickerHint ends the screen post of an overlay command on an agent
+	// that keeps its picker open (every kind but Claude Code).
+	pickerHint = "picker left open: /keys up, down, enter to choose, /stop to close"
 	// topicOnly answers an agent command written in General.
 	topicOnly = "agent commands live in the agent's topic"
 	// closePrefix marks the callback data of the /close keyboard; closeYes
@@ -471,8 +474,10 @@ func forwardWord(line string) string {
 
 // Fire runs the follow-up of a forwarded command once its settle timer
 // fired: read the screen, post it as a quoted reply and, for overlay
-// commands, send esc. A read failure is reported and the esc still goes
-// out so no overlay is left open. Only fatal Telegram errors are returned.
+// commands on Claude Code, send esc. A read failure is reported and the
+// esc still goes out so no overlay is left open. Other kinds keep their
+// picker open: the post ends with pickerHint instead. Only fatal Telegram
+// errors are returned.
 func (i *inbound) Fire(ctx context.Context, key domain.Key) error {
 	if group, ok := strings.CutPrefix(key.PaneID, albumPrefix); ok {
 		return i.fireAlbum(ctx, group)
@@ -487,11 +492,13 @@ func (i *inbound) Fire(ctx context.Context, key domain.Key) error {
 	}
 	delete(i.pending, key)
 	entry, hasTopic := i.topics.Entry(key)
-	_, alive := i.agents(key)
+	agent, alive := i.agents(key)
+	dismiss := f.cmd.Forward.Dismiss && domain.DismissesOverlay(agent.Kind)
+	keep := f.cmd.Forward.Dismiss && !dismiss
 	if !alive || !hasTopic || !entry.Status.Live() {
 		i.log.Debug("command follow-up skipped", slog.String("key", key.String()), slog.String("word", f.word),
 			slog.Bool("alive", alive), slog.Bool("topic", hasTopic && entry.Status.Live()))
-		if f.cmd.Forward.Dismiss && alive {
+		if dismiss && alive {
 			return i.dismiss(ctx, key, f)
 		}
 		return nil
@@ -503,7 +510,11 @@ func (i *inbound) Fire(ctx context.Context, key domain.Key) error {
 	screen, err := i.herdr.ReadScreen(ctx, key.PaneID, domain.ScreenVisible, lines)
 	if err != nil {
 		i.log.Warn("command screen read failed", slog.String("key", key.String()), slog.String("word", f.word), slog.String("err", err.Error()))
-		if err := i.reply(ctx, f.threadID, f.messageID, "⚠️ screen read failed: "+failureReason(err)); err != nil {
+		text := "⚠️ screen read failed: " + failureReason(err)
+		if keep {
+			text += "\n" + pickerHint
+		}
+		if err := i.reply(ctx, f.threadID, f.messageID, text); err != nil {
 			return err
 		}
 	} else {
@@ -518,14 +529,23 @@ func (i *inbound) Fire(ctx context.Context, key domain.Key) error {
 		if text == "" {
 			text = "(screen is empty)"
 		}
-		if err := i.absorb(i.send(ctx, domain.Outgoing{ThreadID: entry.ThreadID, Text: text, Code: true, ReplyTo: f.messageID})); err != nil {
+		out := domain.Outgoing{ThreadID: entry.ThreadID, Text: text, Code: true, ReplyTo: f.messageID}
+		if keep {
+			out.Footer = pickerHint
+		}
+		if err := i.absorb(i.send(ctx, out)); err != nil {
 			return err
 		}
 		i.log.Info("command screen posted", slog.String("key", key.String()), slog.String("word", f.word),
 			slog.Int("thread_id", entry.ThreadID), slog.Int("lines", strings.Count(text, "\n")+1),
-			slog.Int("bytes", len(text)), slog.Bool("dismiss", f.cmd.Forward.Dismiss))
+			slog.Int("bytes", len(text)), slog.String("kind", agent.Kind), slog.Bool("dismiss", dismiss), slog.Bool("picker_kept", keep))
 	}
-	if !f.cmd.Forward.Dismiss {
+	if keep {
+		i.log.Info("command picker kept", slog.String("key", key.String()), slog.String("word", f.word),
+			slog.String("kind", agent.Kind), slog.String("status", string(agent.Status)), slog.Int("thread_id", entry.ThreadID))
+		return nil
+	}
+	if !dismiss {
 		return nil
 	}
 	return i.dismiss(ctx, key, f)

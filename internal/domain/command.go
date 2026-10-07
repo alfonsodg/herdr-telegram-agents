@@ -72,8 +72,19 @@ const (
 	KeyInterrupt = "ctrl+c"
 )
 
+// ClaudeKind is the agent kind Herdr reports for Claude Code panes.
+const ClaudeKind = "claude"
+
 // DefaultAgentKind is what /new starts when no kind is given.
-const DefaultAgentKind = "claude"
+const DefaultAgentKind = ClaudeKind
+
+// DismissesOverlay reports whether a forwarded overlay command gets its
+// automatic esc on an agent of this kind. The esc is for Claude Code
+// overlays; other kinds (Codex, OpenCode, an unknown kind) keep their
+// picker open for /keys, because their pickers take a choice.
+func DismissesOverlay(kind string) bool {
+	return strings.EqualFold(kind, ClaudeKind)
+}
 
 // AgentKinds lists the kinds `herdr agent start` accepts (Herdr 0.9.3, from
 // `herdr agent start --help`, in its order). /new treats its last word as a kind only when
@@ -171,8 +182,9 @@ const (
 // ForwardRule describes the follow-up of one forwarded command.
 type ForwardRule struct {
 	Post ForwardPost
-	// Dismiss sends esc after the screen was read because the command
-	// left an overlay open (/usage, the /model picker).
+	// Dismiss marks a command that leaves an overlay or picker open
+	// (/usage, the /model picker): Claude Code gets esc after the screen
+	// was read, other kinds keep it open (see DismissesOverlay).
 	Dismiss bool
 }
 

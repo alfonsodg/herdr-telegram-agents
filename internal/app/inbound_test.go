@@ -280,6 +280,18 @@ func (f *bridgeFixture) fireCommand(t *testing.T, want int) {
 	}
 }
 
+// claude marks a fixture agent as Claude Code, the only kind whose
+// overlay commands get the automatic esc.
+func (f *bridgeFixture) claude(a domain.Agent) domain.Agent {
+	return f.withKind(a, domain.ClaudeKind)
+}
+
+func (f *bridgeFixture) withKind(a domain.Agent, kind string) domain.Agent {
+	a.Kind = kind
+	f.agents[a.Key] = a
+	return a
+}
+
 const overlayScreen = "❯ /usage\ntranscript line\n▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔\n   Settings  Status   Usage\n\n   Current session\n   █████ 10% used\n\n"
 
 func TestInboundForwardClearPostsTail(t *testing.T) {
@@ -317,7 +329,7 @@ func TestInboundForwardClearPostsTail(t *testing.T) {
 
 func TestInboundForwardUsageCutsOverlayAndDismisses(t *testing.T) {
 	f := newBridgeFixture(t)
-	f.add(t, "p1", "t1", "reviewer", domain.StatusDone)
+	f.claude(f.add(t, "p1", "t1", "reviewer", domain.StatusDone))
 	f.herdr.SetScreen("p1", overlayScreen)
 
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 22, "/usage")); err != nil {
@@ -374,7 +386,7 @@ func TestInboundForwardScreenWithoutRuleIsPostedWhole(t *testing.T) {
 
 func TestInboundForwardModelBareVsName(t *testing.T) {
 	f := newBridgeFixture(t)
-	f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	f.claude(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle))
 	f.herdr.SetScreen("p1", overlayScreen)
 
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 24, "/model")); err != nil {
@@ -473,9 +485,59 @@ func TestInboundForwardPromptFailure(t *testing.T) {
 	}
 }
 
+// codexModelScreen is Codex 0.160.1 after /model (recorded live): a
+// numbered picker without the ▔ rule Claude Code draws.
+const codexModelScreen = "› /model\n\n  Select Model and Effort\n› 1. GPT-6.1-Sol (current)  Latest workhorse model\n  2. GPT-6-Luna             Fast and affordable model\n  enter select · esc back\n"
+
+// TestInboundForwardModelOnCodexKeepsPicker: the automatic esc is for
+// Claude Code overlays; a Codex picker stays open for /keys and the post
+// says so.
+func TestInboundForwardModelOnCodexKeepsPicker(t *testing.T) {
+	for _, kind := range []string{"codex", "opencode", ""} {
+		t.Run("kind="+kind, func(t *testing.T) {
+			f := newBridgeFixture(t)
+			f.withKind(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle), kind)
+			f.herdr.SetScreen("p1", codexModelScreen)
+
+			if err := f.in.HandleTopic(f.ctx, topicMsg(101, 30, "/model")); err != nil {
+				t.Fatal(err)
+			}
+			f.fireCommand(t, 1)
+			if p := f.herdr.Prompts(); len(p) != 1 || p[0] != "p1: /model" {
+				t.Fatalf("Prompts = %v", p)
+			}
+			if k := f.herdr.Keys(); len(k) != 0 {
+				t.Fatalf("picker dismissed: %+v", k)
+			}
+			sent := f.tg.Sent()
+			if len(sent) != 1 || sent[0].Text != strings.TrimSpace(codexModelScreen) || sent[0].Footer != pickerHint || sent[0].ReplyTo != 30 {
+				t.Fatalf("Sent = %+v", sent)
+			}
+			if log := f.logBuf.String(); !strings.Contains(log, `"msg":"command picker kept"`) {
+				t.Fatalf("picker kept not logged: %s", log)
+			}
+		})
+	}
+}
+
+func TestInboundForwardReadFailureOnCodexKeepsPicker(t *testing.T) {
+	f := newBridgeFixture(t)
+	f.withKind(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle), "codex")
+
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 31, "/usage")); err != nil {
+		t.Fatal(err)
+	}
+	f.herdr.FailNext("read", errors.New("read: timeout"))
+	f.fireCommand(t, 1)
+	assertCallsEqual(t, f.tg, "send:101:⚠️ screen read failed: read: timeout\n"+pickerHint+":reply=31")
+	if k := f.herdr.Keys(); len(k) != 0 {
+		t.Fatalf("picker dismissed: %+v", k)
+	}
+}
+
 func TestInboundForwardReadFailureStillDismisses(t *testing.T) {
 	f := newBridgeFixture(t)
-	f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	f.claude(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle))
 
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 31, "/usage")); err != nil {
 		t.Fatal(err)
@@ -490,7 +552,7 @@ func TestInboundForwardReadFailureStillDismisses(t *testing.T) {
 
 func TestInboundForwardDismissFailureIsReported(t *testing.T) {
 	f := newBridgeFixture(t)
-	f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	f.claude(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle))
 	f.herdr.SetScreen("p1", overlayScreen)
 
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 32, "/model")); err != nil {
@@ -506,7 +568,7 @@ func TestInboundForwardDismissFailureIsReported(t *testing.T) {
 
 func TestInboundForwardReplacesPending(t *testing.T) {
 	f := newBridgeFixture(t)
-	f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	f.claude(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle))
 	f.herdr.SetScreen("p1", overlayScreen)
 
 	for _, id := range []int{33, 34} {
@@ -544,7 +606,7 @@ func TestInboundForwardAgentGoneBeforeFire(t *testing.T) {
 
 func TestInboundForwardTopicGoneStillDismisses(t *testing.T) {
 	f := newBridgeFixture(t)
-	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	a := f.claude(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle))
 
 	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 36, "/usage")); err != nil {
 		t.Fatal(err)

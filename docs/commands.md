@@ -59,7 +59,7 @@ Anything you write in a topic reaches the agent:
 | plain text | typed as a prompt and submitted (`agent.prompt`) |
 | `y`, `n`, `yes`, `no`, `1`..`9`, `enter`, `ok`, `esc` while the agent is blocked | the matching key (`agent.send_keys`); in any other status these are prompts. Pressing a button under the question sends its number the same way |
 | `/keys esc enter` | raw key names |
-| `/screen` | for idle or done OpenCode, Codex, Antigravity (`agy`) and Pi, the current session's last reply rendered with bold, lists, links, and code blocks, up to five messages (for Codex, Antigravity and Pi the final answer of the last turn, not cut at the screen height); if unavailable, the visible screen. Claude Code and other agents always show the visible screen. Working and blocked agents show their progress or dialog from the screen |
+| `/screen` | for idle or done OpenCode, Codex, Antigravity (`agy`), Pi and Muse, the current session's last reply rendered with bold, lists, links, and code blocks, up to five messages (for Codex, Antigravity, Pi and Muse the final answer of the last turn, not cut at the screen height); if unavailable, the visible screen. Claude Code and other agents always show the visible screen. Working and blocked agents show their progress or dialog from the screen |
 | `/screen 40` | the visible screen's last 40 lines (max 200), never the reply; the input frame is cut afterwards, so an idle Claude Code pane may answer with fewer than 40 lines |
 | `/screen all` | everything the agent printed since your last message (typed in Herdr or sent here); long output arrives as a `.txt` file |
 | `/focus` | the pane is brought to the front in Herdr |

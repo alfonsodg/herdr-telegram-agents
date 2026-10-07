@@ -376,6 +376,31 @@ option of the Posts group:
   (`herdr integration install pi`), with `--no-session`, outside the TUI, or
   before the first message (Pi creates the file then) the screen is posted.
   The path is used for that one lookup and never stored or logged.
+  For Muse Code (`muse`), Herdr reports no session, so the daemon ties the
+  pane to its Muse session through the pane's processes (`pane.process_info`,
+  Herdr protocol 22 or newer). Muse keeps one runtime file per live session
+  under `runtime/muse/sessions/` in its data directory, naming the owning
+  process (`process_generation_hint`, `pid=…`) and the working directory's
+  name; a session counts only when its pid is one of the pane's processes and
+  its directory name matches the pane's. A pane is never matched by the
+  directory name alone, so two Muse panes in `~/a/api` and `~/b/api`, or in
+  one directory, each get their own answer. After `/new` or `/clear` one
+  process owns several sessions, and the one whose log was written last
+  wins. The data directory is the first of `~/.local/share/muse`, `~/.muse`
+  and `~/Library/Application Support/muse` that has the runtime directory
+  (only the first is confirmed, on Linux); `XDG_DATA_HOME` is not honoured.
+  The log is `sessions/<year>/<month>/<day>/<session id>/session.jsonl`,
+  dated by the session's creation, found by walking the dated directories
+  newest first and remembered per session. Within the same 4 MiB budget the
+  daemon posts the final message of the newest run that ended `completed`:
+  the newest `assistant_message_committed` of that run whose `phase` is not
+  `commentary`; commentary is never posted. A run that has not ended (or a
+  half-written line) is still running and the done post waits and reads
+  again, as for OpenCode; a run that ended `failed` or `cancelled` (Esc)
+  gets the screen, and so does a run Muse never closed because the process
+  was killed. Windows, `--no-session-log` sessions and sessions whose
+  runtime file is missing get the screen. Session ids, pids and paths are
+  used for the lookup and never logged.
 - **Formatted** (default): the same reply rendered for Telegram: headings become bold,
   `- ` lists become `•`, quotes get a bar, `[text](url)` becomes a link,
   inline code and fenced blocks keep their monospace, pipe tables are
@@ -384,7 +409,7 @@ option of the Posts group:
   Should Telegram reject the markup (`can't parse entities`), that part is
   sent once more as a plain code block and the log says so. An agent with
   no readable reply (any kind other than Claude Code, Codex, OpenCode,
-  Antigravity and Pi,
+  Antigravity, Pi and Muse,
   or a missing or stale transcript) gets the screen post instead.
 
 `Formatted` has been the default since 2026-10-01; before that it was
@@ -403,11 +428,12 @@ excluded) and how many output tokens it wrote (summed once per API
 response). A part the transcript does not know is left out; nothing known
 means no line. There is no cost: Claude Code writes the cost once at the
 end of the session, not per turn, and a price table would drift from what
-the status line shows. Claude Code, OpenCode, Codex, Antigravity and Pi only (for OpenCode the
+the status line shows. Claude Code, OpenCode, Codex, Antigravity, Pi and Muse only (for OpenCode the
   edited files are distinct paths from completed `edit` and `write` tools; for
 Codex the line has the duration, the model and the output tokens, but no files,
 as its rollout does not name them reliably; for Antigravity the line has the
-duration only, as its transcript names neither the model nor the files; for
+duration only, as its transcript names neither the model nor the files, and
+so has Muse; for
 Pi the line has the duration, the model, the distinct paths of the turn's
 `edit` and `write` tool calls and the output tokens summed over the turn's
 assistant messages): a pane of another kind, a
@@ -431,10 +457,10 @@ never folds. `Screen` posts are never folded, whatever the option says.
 Limits worth knowing: two Claude Code panes in the same directory cannot be
 told apart, so the reply of the one that wrote last wins (the stale check
 above catches the case where the other pane wrote before this turn began);
-other agents (Gemini, Muse, OMP) always get the screen; when no transcript or no
+other agents (Gemini, OMP) always get the screen; when no transcript or no
 text is found the daemon posts the screen and logs `reply source
 unavailable` with a safe category. Blocked posts are never affected: the dialog
-with its buttons exists only on the screen. For an idle or done OpenCode, Codex, Antigravity or Pi agent,
+with its buttons exists only on the screen. For an idle or done OpenCode, Codex, Antigravity, Pi or Muse agent,
 a bare `/screen` tries the current session reply, rendered like `Formatted`,
 whatever `Done post` says. It falls back to the screen when the reply is
 unavailable, empty, or stale. The reply stops after five Telegram messages

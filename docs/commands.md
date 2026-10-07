@@ -116,9 +116,11 @@ sent first is held back the same way: it is saved to the inbox, but its
 prompt is not typed, so send it again. The free text after a ✏️ press is
 typed as before and is not held back.
 
-OpenCode's model picker is its own `/models`; send that command (it is in
-the `/` menu) and it behaves like the pickers above: the picker stays open
-for `/keys` and the next plain message is held back once.
+OpenCode's own name for its model picker is `/models`; it is in the `/`
+menu, and `/model` opens the same picker. Either behaves like the pickers
+above: the picker stays open for `/keys` and the next plain message is held
+back once. `/models` is refused on other agent kinds, which have no such
+command.
 
 ## Agent control
 

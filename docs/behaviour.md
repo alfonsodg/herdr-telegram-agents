@@ -714,10 +714,11 @@ you can see the plugin working. Tick `Quiet while at the desk` in
 - **Where there is no source** (a Linux server or SSH session without
   `DISPLAY` or `WAYLAND_DISPLAY`, KDE Plasma on Wayland where the Mutter
   call fails and `xprintidle` sees only X windows, or neither `gdbus` nor
-  `xprintidle` installed) quiet **starts at the desk** when the option is
-  on: Telegram stays silent, `/away` releases it, a timed `/away` hands the
-  default back when it expires and `/here` brings it back by hand. The
-  daemon logs one warning at start (`no input idle source`) and retries
+  `xprintidle` installed — the source may exist and never answer) quiet
+  **starts at the desk** when the option is on: Telegram stays silent,
+  `/away` releases it, a timed `/away` hands the default back when it
+  expires and `/here` brings it back by hand. The daemon logs one warning
+  at start (`no input idle source` or `presence sample failed`) and retries
   once a minute, so a source that appears later takes over. When a source
   exists but a sample fails (a timeout, the session bus not up yet), the
   previous verdict stays, one warning `presence sample failed` is logged,

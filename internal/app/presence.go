@@ -146,6 +146,12 @@ func (p *Presence) sample(ctx context.Context) {
 			p.failing = true
 			p.log.Warn("presence sample failed, keeping the previous verdict", slog.String("err", err.Error()), slog.Bool("at_desk", p.atDesk))
 		}
+		if !p.awayChosen && !p.manualAway && !p.manualHere && !p.sampled {
+			// The source exists but never gave a verdict (a Wayland session
+			// the probes cannot read): assume the operator is at the desk.
+			p.manualHere, p.manualHereAuto = true, true
+			p.log.Info("presence: no verdict from the idle source, starting at the desk until /away")
+		}
 		return
 	}
 	if p.failing {

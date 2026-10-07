@@ -265,4 +265,19 @@ func TestPresenceUnsupportedAndFailing(t *testing.T) {
 	if g.p.Quiet() {
 		t.Error("recovered sample ignored")
 	}
+
+	// A source that never gives a verdict (KDE Wayland whose probes all
+	// fail) starts at the desk too, and a working sample takes over.
+	h := newPresence(t, testkit.NewFakeIdle(0))
+	h.idle.Fail(errors.New("gdbus: org.gnome.Mutter.IdleMonitor not activatable"))
+	h.p.Poll(ctx)
+	if !h.p.Quiet() || !h.p.State().ManualHere {
+		t.Fatalf("no verdict should start at the desk: %+v", h.p.State())
+	}
+	h.change()
+	h.idle.Set(time.Second)
+	h.p.Poll(ctx)
+	if !h.p.Quiet() || h.p.State().ManualHere || !h.p.State().AtDesk {
+		t.Fatalf("a working sample must take over: %+v", h.p.State())
+	}
 }

@@ -301,17 +301,21 @@ func BuildSupervisor(env PluginEnv, log *slog.Logger) *Supervisor {
 
 // replySources is the reader chain behind done posts and /screen: Claude
 // Code transcripts by working directory, then the exact-session OpenCode
-// export, Codex rollout, Antigravity transcript and pi session file. Each
-// reader rejects the kinds it does not know with ErrNoReply, and the chain
-// keeps a reader's ErrReplyPending over a later reader's "unsupported agent".
+// export, Codex rollout, Antigravity transcript and pi session file, then
+// the Muse session log of the pane's process (processes lists the pane's
+// pids). Each reader rejects the kinds it does not know with ErrNoReply, and
+// the chain keeps a reader's ErrReplyPending over a later reader's
+// "unsupported agent".
 func replySources(session func(context.Context, string) (domain.SessionTuple, error),
-	openCodeExport func(context.Context, string) ([]byte, error), log *slog.Logger) domain.MultiReplySource {
+	openCodeExport func(context.Context, string) ([]byte, error),
+	processes func(context.Context, string) ([]int, error), log *slog.Logger) domain.MultiReplySource {
 	return domain.MultiReplySource{
 		transcript.NewReader(log),
 		transcript.NewOpenCodeReader(session, openCodeExport, log),
 		transcript.NewCodexReader(session, log),
 		transcript.NewAgyReader(session, log),
 		transcript.NewPiReader(session, log),
+		transcript.NewMuseReader(processes, log),
 	}
 }
 
@@ -470,7 +474,7 @@ func BuildDaemon(ctx context.Context, env PluginEnv, cfg domain.Config, log *slo
 	system.SweepOpenCodeExports(env.StateDir, log)
 	openCodeExport := system.NewOpenCodeExporter(env.StateDir, log).Export
 	bridge := app.NewBridge(cfg, hg, tg, registry, reconciler, capture, opts,
-		app.Services{Replies: replySources(hg.AgentSession, openCodeExport, log), Git: system.NewGitRunner(log), Inbox: inbox, Config: state.NewConfigStore(env.ConfigDir, log),
+		app.Services{Replies: replySources(hg.AgentSession, openCodeExport, hg.PaneProcesses, log), Git: system.NewGitRunner(log), Inbox: inbox, Config: state.NewConfigStore(env.ConfigDir, log),
 			Updates: BuildUpdateManager(env, log), UpdateJobs: state.NewUpdateStore(env.StateDir, log),
 			LaunchUpdate:  func(ctx context.Context, id string) (int, error) { return LaunchUpdateWorker(ctx, env, id, log) },
 			UpdateRunning: func() bool { return BuildSupervisor(env, log).Status().Running }}, clock, log)

@@ -36,7 +36,7 @@ func TestReplySourcesKeepsOpenCodePending(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			export := func(context.Context, string) ([]byte, error) { return []byte(tc.export), nil }
-			r, err := replySources(session, export, nil).LastReply(context.Background(), agent)
+			r, err := replySources(session, export, noProcesses, nil).LastReply(context.Background(), agent)
 			if tc.wantError != nil {
 				if !errors.Is(err, tc.wantError) {
 					t.Fatalf("err = %v, want %v", err, tc.wantError)
@@ -83,7 +83,7 @@ func TestReplySourcesReadsAgy(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "transcript.jsonl"), []byte(strings.Join(tc.lines, "\n")+"\n"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			r, err := replySources(session, noExport, nil).LastReply(context.Background(), agent)
+			r, err := replySources(session, noExport, noProcesses, nil).LastReply(context.Background(), agent)
 			if tc.wantError != nil {
 				if !errors.Is(err, tc.wantError) {
 					t.Fatalf("err = %v, want %v", err, tc.wantError)
@@ -98,9 +98,9 @@ func TestReplySourcesReadsAgy(t *testing.T) {
 }
 
 // TestReplySourcesReadsPi runs the daemon's real reader chain for a pi pane:
-// the pi reader is last in the chain, a finished turn returns its answer,
-// and a running one reaches the caller as ErrReplyPending rather than as an
-// earlier reader's "unsupported agent".
+// a finished turn returns its answer, and a running one reaches the caller
+// as ErrReplyPending rather than as another reader's "unsupported agent"
+// (the Muse reader comes after it).
 func TestReplySourcesReadsPi(t *testing.T) {
 	noExport := func(context.Context, string) ([]byte, error) { return nil, errors.New("not opencode") }
 	header := `{"type":"session","version":3,"id":"0199aaaa-bbbb-7ccc-8ddd-eeeeeeeeeeee","timestamp":"2026-10-07T09:00:00.000Z","cwd":"/work"}`
@@ -128,7 +128,74 @@ func TestReplySourcesReadsPi(t *testing.T) {
 			tuple := domain.SessionTuple{Source: "herdr:pi", Agent: "pi", Kind: "path", Value: path}
 			session := func(context.Context, string) (domain.SessionTuple, error) { return tuple, nil }
 			agent := domain.Agent{Key: domain.Key{PaneID: "p1", TerminalID: "t1", SessionDigest: tuple.Digest()}, Kind: "pi", Cwd: t.TempDir()}
-			r, err := replySources(session, noExport, nil).LastReply(context.Background(), agent)
+			r, err := replySources(session, noExport, noProcesses, nil).LastReply(context.Background(), agent)
+			if tc.wantError != nil {
+				if !errors.Is(err, tc.wantError) {
+					t.Fatalf("err = %v, want %v", err, tc.wantError)
+				}
+				return
+			}
+			if err != nil || r.Text != tc.wantText {
+				t.Fatalf("LastReply = %q, %v; want %q", r.Text, err, tc.wantText)
+			}
+		})
+	}
+}
+
+// noProcesses is the pane-process lookup for chain tests that are not
+// about Muse.
+func noProcesses(context.Context, string) ([]int, error) { return nil, errors.New("not muse") }
+
+// TestReplySourcesReadsMuse runs the daemon's real reader chain for a Muse
+// pane: the Muse reader is last in the chain and finds the session through
+// the pane's process id, a finished run returns its final answer, and a
+// running one reaches the caller as ErrReplyPending.
+func TestReplySourcesReadsMuse(t *testing.T) {
+	const id = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b"
+	session := func(context.Context, string) (domain.SessionTuple, error) {
+		return domain.SessionTuple{}, errors.New("herdr reports no session for muse")
+	}
+	noExport := func(context.Context, string) ([]byte, error) { return nil, errors.New("not opencode") }
+	processes := func(context.Context, string) ([]int, error) { return []int{4242}, nil }
+	agent := domain.Agent{Key: domain.Key{PaneID: "p1", TerminalID: "t1"}, Kind: "muse", Cwd: filepath.Join("/work", "api")}
+	run := func(event string) string {
+		return `{"recorded_at":1791291600000000,"payload_type":"runtime.session","payload":{"kind":"run","run_id":"r1","event":` + event + `}}`
+	}
+	started := run(`{"kind":"started","prompt":"go"}`)
+	for name, tc := range map[string]struct {
+		lines     []string
+		wantText  string
+		wantError error
+	}{
+		"running": {lines: []string{started,
+			run(`{"kind":"assistant_message_committed","message_id":"m1","phase":"commentary","text":"checking"}`)},
+			wantError: domain.ErrReplyPending},
+		"settled": {lines: []string{started,
+			run(`{"kind":"assistant_message_committed","message_id":"m1","phase":"commentary","text":"checking"}`),
+			run(`{"kind":"assistant_message_committed","message_id":"m2","phase":"final_answer","text":"All done."}`),
+			run(`{"kind":"terminal","terminal":"completed","reason":null}`)},
+			wantText: "All done."},
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			data := filepath.Join(home, ".local", "share", "muse")
+			runtime := filepath.Join(data, "runtime", "muse", "sessions")
+			logDir := filepath.Join(data, "sessions", "2026", "10", "07", id)
+			for _, dir := range []string{runtime, logDir} {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			rt := `{"schema_version":1,"session_id":"` + id + `","workspace_label":"api","process_generation_hint":"pid=4242"}`
+			if err := os.WriteFile(filepath.Join(runtime, id+".json"), []byte(rt), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(logDir, "session.jsonl"), []byte(strings.Join(tc.lines, "\n")+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r, err := replySources(session, noExport, processes, nil).LastReply(context.Background(), agent)
 			if tc.wantError != nil {
 				if !errors.Is(err, tc.wantError) {
 					t.Fatalf("err = %v, want %v", err, tc.wantError)

@@ -1368,8 +1368,8 @@ func (o *outbound) absorbEdit(key domain.Key, err error) error {
 // flag and the duplicate check because the operator asked for it. Errors
 // are returned so the caller can tell the operator.
 //
-// A bare /screen (lines == 0) on an OpenCode, Codex or agy agent at its prompt
-// tries the reply source first and posts the reply rendered from Markdown:
+// A bare /screen (lines == 0) on an OpenCode, Codex, agy, pi or Muse agent
+// at its prompt tries the reply source first and posts the reply rendered from Markdown:
 // OpenCode draws a multi-column TUI that comes out as scrambled text when the
 // screen is scraped row by row, and a Codex answer can be taller than the
 // screen. /screen N stays a literal screen read on purpose: an
@@ -1413,10 +1413,10 @@ func (o *outbound) Screen(ctx context.Context, key domain.Key, lines int) error 
 // screenReplyKind reports whether a bare /screen posts the agent's reply
 // instead of the screen. OpenCode draws a multi-column TUI that scrapes into
 // scrambled text; a Codex answer can be taller than the screen and would be
-// cut, and so can an Antigravity (agy) or pi answer, which is long markdown.
-// Claude Code and the other kinds keep the screen.
+// cut, and so can an Antigravity (agy), pi or Muse answer, which is long
+// markdown. Claude Code and the other kinds keep the screen.
 func screenReplyKind(kind string) bool {
-	return kind == "opencode" || kind == "codex" || kind == "agy" || kind == "pi"
+	return kind == "opencode" || kind == "codex" || kind == "agy" || kind == "pi" || kind == "muse"
 }
 
 // replyScreen tries the agent's reply source for a bare /screen post. ok

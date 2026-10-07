@@ -389,12 +389,12 @@ func TestOutboundScreenOtherKindsKeepTheScreen(t *testing.T) {
 }
 
 // TestOutboundScreenCodexUsesReply covers a bare /screen on Codex,
-// Antigravity (agy) and pi: an idle or done agent posts its final answer whole (it
+// Antigravity (agy), pi and Muse: an idle or done agent posts its final answer whole (it
 // can be taller than the screen), a working or blocked one still gets the
 // screen, and /screen N stays a literal screen read.
 func TestOutboundScreenCodexUsesReply(t *testing.T) {
 	answer := "Plan:\n1. Do the **first** thing.\n2. Then the second."
-	for _, kind := range []string{"codex", "agy", "pi"} {
+	for _, kind := range []string{"codex", "agy", "pi", "muse"} {
 		for _, st := range []domain.Status{domain.StatusIdle, domain.StatusDone, domain.StatusWorking, domain.StatusBlocked} {
 			for _, lines := range []int{0, 10} {
 				screenReplyCase(t, kind, st, lines, answer)

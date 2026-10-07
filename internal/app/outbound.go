@@ -97,6 +97,10 @@ type outbound struct {
 	refresh map[domain.Key]int
 	// typing holds the open ✏️ wait per agent.
 	typing map[domain.Key]typingWait
+	// unreadable counts consecutive done posts whose reply could not be
+	// read for an agent the daemon has a reader for; the notice fires once
+	// per streak and a readable reply clears the count.
+	unreadable map[domain.Key]int
 }
 
 // pendingCapture is the first screen of a question kept while the blocked
@@ -628,10 +632,14 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompleti
 		switch {
 		case err != nil && mode != domain.DoneScreen:
 			o.log.Info("reply source unavailable", slog.String("key", key.String()), slog.String("mode", string(mode)), slog.Any("err", logErr))
+			if !errors.Is(err, domain.ErrUnsupportedAgent) {
+				o.noteUnreadable(ctx, key, entry.ThreadID)
+			}
 			mode = domain.DoneScreen
 		case err != nil:
 			o.log.Debug("turn meta unavailable", slog.String("key", key.String()), slog.Any("err", logErr))
 		default:
+			delete(o.unreadable, key)
 			if mode != domain.DoneScreen {
 				reply, text = r, strings.TrimSpace(r.Text)
 			}
@@ -1398,6 +1406,28 @@ func freshReply(hasTurn bool, turnStarted time.Time, r domain.Reply) bool {
 		return true
 	}
 	return !r.Written.Before(turnStarted)
+}
+
+// noteUnreadable counts consecutive done posts whose reply could not be
+// read for an agent the daemon has a reader for. After
+// unreadableNoticeAfter in a row it posts one notice in the topic: a
+// reader that quietly stopped working (a store grown past a limit, a
+// changed format) must not degrade to screens unnoticed. A readable reply
+// clears the count.
+func (o *outbound) noteUnreadable(ctx context.Context, key domain.Key, threadID int) {
+	if o.unreadable == nil {
+		o.unreadable = map[domain.Key]int{}
+	}
+	o.unreadable[key]++
+	if o.unreadable[key] < unreadableNoticeAfter {
+		return
+	}
+	o.unreadable[key] = 0
+	if _, err := o.tg.Send(ctx, domain.Outgoing{ThreadID: threadID, Text: unreadableNotice, Notify: true}); err != nil {
+		o.log.Warn("unreadable notice failed", slog.String("key", key.String()), slog.String("err", err.Error()))
+		return
+	}
+	o.log.Warn("unreadable replies notice posted", slog.String("key", key.String()), slog.Int("thread_id", threadID))
 }
 
 // ScreenAll posts what the agent printed since the last human message: the

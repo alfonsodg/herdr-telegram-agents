@@ -3,6 +3,7 @@ package domain_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/permgps/herdr-telegram-agents/internal/domain"
@@ -77,6 +78,19 @@ func TestMultiReplySourceStopsOnFailure(t *testing.T) {
 	_, err := (domain.MultiReplySource{first, second}).LastReply(context.Background(), domain.Agent{})
 	if !errors.Is(err, want) || second.called {
 		t.Fatalf("err = %v, second called = %v", err, second.called)
+	}
+}
+
+// TestMultiReplySourcePrefersTheRealFailure: when one source understands
+// the kind and fails while the rest reject the kind, the caller sees the
+// real failure, not the last "unsupported agent" wrap.
+func TestMultiReplySourcePrefersTheRealFailure(t *testing.T) {
+	real := fmt.Errorf("%w: export failed", domain.ErrNoReply)
+	first := &stubReplySource{err: real}
+	second := &stubReplySource{err: fmt.Errorf("%w: unsupported agent %q", domain.ErrUnsupportedAgent, "opencode")}
+	_, err := (domain.MultiReplySource{first, second}).LastReply(context.Background(), domain.Agent{})
+	if !errors.Is(err, real) || errors.Is(err, domain.ErrUnsupportedAgent) {
+		t.Fatalf("err = %v, want the real failure", err)
 	}
 }
 

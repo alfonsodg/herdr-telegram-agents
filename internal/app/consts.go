@@ -110,6 +110,11 @@ const (
 	typingTimeout = 10 * time.Minute
 	// typingHeadRunes is how much of the typed text the ✅ ✏️ button shows.
 	typingHeadRunes = 30
+	// turnStartSlack forgives the gap between the real start of a turn and
+	// the moment the daemon sees the working status (and second-precision
+	// transcript timestamps) when judging whether a reply belongs to the
+	// current turn.
+	turnStartSlack = 3 * time.Second
 	// gitInlineRunes is the longest /git output posted as a message; longer
 	// output goes out as a document.
 	gitInlineRunes = 3600

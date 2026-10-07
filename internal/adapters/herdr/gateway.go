@@ -190,6 +190,29 @@ func (g *Gateway) AgentSession(ctx context.Context, paneID string) (domain.Sessi
 	return domain.SessionTuple{}, nil
 }
 
+// PaneProcesses returns the pids of the processes in the foreground of
+// paneID, deduplicated, in Herdr's order. Like AgentSession the answer is
+// transient: a reply source uses it for one lookup and never stores it.
+// Herdr releases before protocol 22 may not know pane.process_info; the
+// call error is returned as is.
+func (g *Gateway) PaneProcesses(ctx context.Context, paneID string) ([]int, error) {
+	var res paneProcessInfoResult
+	if err := g.call(ctx, "pane.process_info", paneID, paneParams{PaneID: paneID}, &res); err != nil {
+		return nil, err
+	}
+	pids := make([]int, 0, len(res.ProcessInfo.ForegroundProcesses))
+	seen := make(map[int]bool, len(res.ProcessInfo.ForegroundProcesses))
+	for _, p := range res.ProcessInfo.ForegroundProcesses {
+		if p.PID <= 0 || seen[p.PID] {
+			continue
+		}
+		seen[p.PID] = true
+		pids = append(pids, p.PID)
+	}
+	g.log.Debug("pane processes read", slog.String("pane", paneID), slog.Int("count", len(pids)))
+	return pids, nil
+}
+
 // ReadScreen returns plain text from the agent's terminal.
 func (g *Gateway) ReadScreen(ctx context.Context, target string, source domain.ScreenSource, lines int) (domain.Screen, error) {
 	var res paneReadResult

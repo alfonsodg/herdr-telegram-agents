@@ -67,7 +67,7 @@ Anything you write in a topic reaches the agent:
 | `/stop` | `esc` through `agent.send_keys`, in any status: Claude Code cancels the running turn or dismisses the open dialog; the reply is `⏹ sent esc` |
 | `/interrupt` | `ctrl+c` through `agent.send_keys`, in any status: a hard interrupt; the reply is `⛔ sent ctrl+c` |
 | `/close` | the question `Close <label>? The pane and its tab go away.` with `Yes, close` / `No` buttons; `Yes` closes the pane through `pane.close` (the tab goes with it when it held nothing else) and the topic gets 🏁 through the usual exit path; `No` keeps everything. Only the latest question of an agent acts; see [Questions and buttons](behaviour.md#questions-and-buttons) |
-| `/clear`, `/compact [instructions]`, `/usage`, `/model [name]` | typed into the agent as its own command; two seconds later the screen is posted as a quoted reply; only while the agent is idle. On Claude Code `/usage` and a bare `/model` are closed with `esc` for you; other agents keep their picker open, see [Claude Code commands](#claude-code-commands) |
+| `/clear`, `/compact [instructions]`, `/usage`, `/model [name]`, `/models` | typed into the agent as its own command (`/models` is OpenCode's model picker); two seconds later the screen is posted as a quoted reply; only while the agent is idle. On Claude Code `/usage` and a bare `/model` are closed with `esc` for you; other agents keep their picker open, see [Claude Code commands](#claude-code-commands) |
 | `/status` | `<emoji> <status> · <label> · pane <id>` |
 | `/options` | a hint: the settings panel lives in General |
 | `/away`, `/here`, `/new`, `/observers` | a hint: these commands live in General |
@@ -112,8 +112,11 @@ again`. The hold is one-shot because the bridge cannot see whether the picker
 was closed at the desk: send the message again and it goes through. `/keys`,
 `/stop`, `/interrupt`, another of these commands, a change of the agent's
 status, or ten minutes release the hold without a refusal. Attachments and
-the free text after a ✏️ press are typed as before and are not held back. OpenCode opens the same model picker
-for `/model` as for its own `/models`, so no extra command is needed.
+the free text after a ✏️ press are typed as before and are not held back.
+
+OpenCode's model picker is its own `/models`; send that command (it is in
+the `/` menu) and it behaves like the pickers above: the picker stays open
+for `/keys` and the next plain message is held back once.
 
 ## Agent control
 

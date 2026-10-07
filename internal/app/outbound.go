@@ -101,10 +101,17 @@ type outbound struct {
 	// source to finish the turn (domain.ErrReplyPending); the debouncer
 	// carries the retry timer.
 	pendingReplies map[domain.Key]pendingReply
-	// unreadable counts consecutive done posts whose reply could not be
-	// read for an agent the daemon has a reader for; the notice fires once
-	// per streak and a readable reply clears the count.
-	unreadable map[domain.Key]int
+	// unreadable tracks one agent's unreadable-reply streak: the count of
+	// delivered fallback posts whose reply could not be read, and whether
+	// the notice for this streak already went out. A readable reply clears
+	// the state.
+	unreadable map[domain.Key]unreadableState
+}
+
+// unreadableState is one agent's streak, see outbound.unreadable.
+type unreadableState struct {
+	count    int
+	notified bool
 }
 
 // pendingReply is a done post fired again after replyPendingDelay. It keeps
@@ -670,6 +677,7 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompleti
 	// unavailable. A failure costs the screen mode nothing but the line.
 	wantMeta := status == domain.StatusDone && o.meta() && o.replies != nil
 	var footer string
+	unreadableFallback := false
 	if !captured && (mode != domain.DoneScreen || wantMeta) {
 		r, err := o.replies.LastReply(ctx, agent)
 		if err == nil && !freshReply(hasTurn, t.started, r) {
@@ -703,9 +711,7 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompleti
 			mode = domain.DoneScreen
 		case err != nil && mode != domain.DoneScreen:
 			o.log.Info("reply source unavailable", slog.String("key", key.String()), slog.String("mode", string(mode)), slog.Any("err", logErr))
-			if !errors.Is(err, domain.ErrUnsupportedAgent) && !errors.Is(err, domain.ErrStaleTranscript) {
-				o.noteUnreadable(ctx, key, entry.ThreadID)
-			}
+			unreadableFallback = !errors.Is(err, domain.ErrUnsupportedAgent) && !errors.Is(err, domain.ErrStaleTranscript)
 			mode = domain.DoneScreen
 		case err != nil:
 			o.log.Debug("turn meta unavailable", slog.String("key", key.String()), slog.Any("err", logErr))
@@ -764,6 +770,10 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompleti
 		return o.sendFailed(key, err)
 	}
 	o.lastPosted[key] = hash
+	if unreadableFallback {
+		// The fallback post is on its way: this read failure counts.
+		o.noteUnreadable(ctx, key, entry.ThreadID)
+	}
 	if len(out.Buttons) > 0 {
 		o.keyboards[key] = keyboard{messageID: id, choices: dialog.Choices, multi: dialog.Multi, textEntry: dialog.TextEntry, textLabel: dialog.TextLabel,
 			cursor: dialog.Cursor, submitRow: dialog.SubmitRow}
@@ -1158,7 +1168,7 @@ func (o *outbound) AnswerBlocked(ctx context.Context, key domain.Key, text strin
 	if !ok || kb.textEntry == 0 {
 		return false, nil
 	}
-	if !o.blockedDialogStillOpen(ctx, key, kb) {
+	if open, known := o.blockedDialogState(ctx, key, kb); !known || !open {
 		return false, nil
 	}
 	if err := o.herdr.SendKeys(ctx, key.PaneID, []string{strconv.Itoa(kb.textEntry)}); err != nil {
@@ -1179,22 +1189,38 @@ func (o *outbound) AnswerBlocked(ctx context.Context, key domain.Key, text strin
 	return true, nil
 }
 
-// blockedDialogStillOpen re-reads the screen and reports whether the dialog
-// behind kb is still the one on screen: same choices, multi flag and
-// text-entry number, with a text entry present at all.
-func (o *outbound) blockedDialogStillOpen(ctx context.Context, key domain.Key, kb keyboard) bool {
+// blockedDialogState reads the screen and classifies it against the dialog
+// behind kb: open reports the same dialog still on screen, known reports a
+// successful read. An unknown screen (a failed read) is neither, so nothing
+// is ever typed on the strength of a missing screen.
+func (o *outbound) blockedDialogState(ctx context.Context, key domain.Key, kb keyboard) (open, known bool) {
 	screen, err := o.herdr.ReadScreen(ctx, key.PaneID, domain.ScreenDetection, blockedLines)
 	if err != nil {
-		return false
+		return false, false
 	}
 	d := domain.ParseDialog(o.clean(key, screen.Text))
-	return d.TextEntry != 0 && len(d.Choices) == len(kb.choices) && d.Multi == kb.multi && d.TextEntry == kb.textEntry
+	return d.TextEntry != 0 && sameChoices(d, kb), true
 }
 
-// waitBlockedField polls the screen until the dialog is no longer there,
-// the chosen text entry having replaced it with its box. A box that never
-// appears (or reads that never succeed) times out; text is never typed
-// then.
+// sameChoices compares the dialog with the stored keyboard beyond its
+// shape: a replacement question with the same option count and text-entry
+// number must not pass.
+func sameChoices(d domain.Dialog, kb keyboard) bool {
+	if len(d.Choices) != len(kb.choices) || d.Multi != kb.multi || d.TextEntry != kb.textEntry {
+		return false
+	}
+	for i, c := range d.Choices {
+		if c.Number != kb.choices[i].Number || c.Label != kb.choices[i].Label {
+			return false
+		}
+	}
+	return true
+}
+
+// waitBlockedField polls until the dialog gave way to a positively
+// identified input box (the prompt marker). A failed read or an
+// unrecognised, blank or replaced screen never receives text: the poll
+// simply times out.
 func (o *outbound) waitBlockedField(ctx context.Context, key domain.Key, kb keyboard) bool {
 	for i := 0; i < blockedFieldPolls; i++ {
 		select {
@@ -1202,9 +1228,20 @@ func (o *outbound) waitBlockedField(ctx context.Context, key domain.Key, kb keyb
 			return false
 		case <-time.After(blockedFieldDelay):
 		}
-		if !o.blockedDialogStillOpen(ctx, key, kb) {
-			return true
+		screen, err := o.herdr.ReadScreen(ctx, key.PaneID, domain.ScreenDetection, blockedLines)
+		if err != nil {
+			continue
 		}
+		text := o.clean(key, screen.Text)
+		d := domain.ParseDialog(text)
+		if d.TextEntry != 0 && sameChoices(d, kb) {
+			continue // still the dialog
+		}
+		if strings.Contains(text, "❯") {
+			return true // the input box is visible
+		}
+		// Neither the old dialog nor an input box: keep polling; the
+		// screen never receives text without the box.
 	}
 	return false
 }
@@ -1553,30 +1590,40 @@ func freshReply(hasTurn bool, turnStarted time.Time, r domain.Reply) bool {
 	return !r.Written.Before(turnStarted.Add(-turnStartSlack))
 }
 
-// noteUnreadable counts consecutive done posts whose reply could not be
-// read for an agent the daemon has a reader for. After
+// noteUnreadable counts one delivered fallback post whose reply could not
+// be read for an agent the daemon has a reader for. After
 // unreadableNoticeAfter in a row it posts one notice in the topic: a
 // reader that quietly stopped working (a store grown past a limit, a
-// changed format) must not degrade to screens unnoticed. A readable reply
-// clears the count. Expected fallbacks (unsupported kinds, stale
-// transcripts) never get here. The notice is diagnostic: no sound, and
-// held like every other non-question post while quiet mode is at the desk.
+// changed format) must not degrade to screens unnoticed. The notice fires
+// once per streak, is retried when held or when its send failed, and a
+// readable reply clears the state. Expected fallbacks (unsupported kinds,
+// stale transcripts) never get here. The notice is diagnostic: no sound,
+// and held like every other non-question post while quiet mode is at the
+// desk.
 func (o *outbound) noteUnreadable(ctx context.Context, key domain.Key, threadID int) {
 	if o.unreadable == nil {
-		o.unreadable = map[domain.Key]int{}
+		o.unreadable = map[domain.Key]unreadableState{}
 	}
-	o.unreadable[key]++
-	if o.unreadable[key] < unreadableNoticeAfter {
+	st := o.unreadable[key]
+	if st.notified {
 		return
 	}
-	o.unreadable[key] = 0
+	st.count++
+	if st.count < unreadableNoticeAfter {
+		o.unreadable[key] = st
+		return
+	}
 	if o.quiet() && o.posts() == domain.PostsHeld {
+		o.unreadable[key] = st // retried when quiet ends
 		return
 	}
 	if _, err := o.tg.Send(ctx, domain.Outgoing{ThreadID: threadID, Text: unreadableNotice, Notify: false}); err != nil {
 		o.log.Warn("unreadable notice failed", slog.String("key", key.String()), slog.String("err", err.Error()))
+		o.unreadable[key] = st // retried with the next delivered post
 		return
 	}
+	st.notified = true
+	o.unreadable[key] = st
 	o.log.Warn("unreadable replies notice posted", slog.String("key", key.String()), slog.Int("thread_id", threadID))
 }
 

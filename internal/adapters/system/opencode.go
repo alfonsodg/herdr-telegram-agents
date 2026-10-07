@@ -89,12 +89,14 @@ func (e *OpenCodeExporter) Export(ctx context.Context, sessionID string) ([]byte
 	if sessionID == "" || strings.HasPrefix(sessionID, "-") {
 		return nil, fmt.Errorf("opencode export: invalid session id")
 	}
+	dbFallback := ""
 	if out, err := e.exportFromDB(ctx, sessionID); err == nil {
 		return out, nil
 	} else if parentErr := ctx.Err(); parentErr != nil {
 		return nil, fmt.Errorf("opencode export: %w", parentErr)
 	} else {
-		e.log.Debug("opencode db read unavailable", slog.String("reason", err.Error()))
+		// Folded into the export event below: one debug line per read.
+		dbFallback = err.Error()
 	}
 	bin, err := exec.LookPath(e.bin)
 	if err != nil {
@@ -135,9 +137,13 @@ func (e *OpenCodeExporter) Export(ctx context.Context, sessionID string) ([]byte
 			category = "exit_nonzero"
 		}
 	}
-	e.log.Debug("opencode export", slog.String("source", "export"), slog.Int64("dur_ms", time.Since(start).Milliseconds()),
+	attrs := []slog.Attr{slog.String("source", "export"), slog.Int64("dur_ms", time.Since(start).Milliseconds()),
 		slog.Int("bytes", len(result.out)), slog.Bool("capped", result.capped),
-		slog.String("category", category), slog.Int("exit_code", exitCode))
+		slog.String("category", category), slog.Int("exit_code", exitCode)}
+	if dbFallback != "" {
+		attrs = append(attrs, slog.String("db_fallback", dbFallback))
+	}
+	e.log.LogAttrs(ctx, slog.LevelDebug, "opencode export", attrs...)
 	switch {
 	case parentCtx.Err() != nil:
 		return nil, fmt.Errorf("opencode export: %w", parentCtx.Err())

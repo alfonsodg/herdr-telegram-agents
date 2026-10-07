@@ -204,8 +204,9 @@ Telegram group on a phone.
 - [x] **Send test message**: the action posts a 🔔 message into General and reports `send-test: delivered to General (message N)` (2026-09-03, `v0.3.0-1-gfb4d386-dirty`, message 980); with the daemon stopped it still works (by design: the action never talks to the daemon)
 
 - [ ] A long OpenCode session (export over 16 MiB) posts the whole answer
-  through the store read, not the 12-line screen; without `sqlite3` it still
-  posts the whole answer through the export fallback.
+  through the store read, not the 12-line screen.
+- [ ] Without `sqlite3`, a normal session (export below the cap) still posts
+  the whole answer through the export fallback.
 - [ ] Break one agent's reply reader (e.g. point its store at an unreadable
   file): after several done posts the topic gets one ⚠️ notice; repair it
   and the next readable reply clears the streak.

@@ -292,7 +292,8 @@ option of the Posts group:
   rather than a file per session, the daemon asks Herdr for the pane's
   `agent_session` at read time. On OpenCode 2.x it reads the rows since the
   last user message from opencode's own database
-  (`~/.local/share/opencode/opencode.db`, through the `sqlite3` binary on its
+  (`$XDG_DATA_HOME/opencode/opencode.db`, `~/.local/share/opencode/opencode.db`
+  by default, through the `sqlite3` binary on its
   `PATH`, read-only through a `file:` URI with an empty init file, one
   indexed query bounded at 5 s); when the database, `sqlite3` or the
   expected schema is unavailable it falls back to `opencode session export <session id>`

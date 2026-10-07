@@ -1166,9 +1166,17 @@ func (i *inbound) InboxFinished(ctx context.Context, r inboxResult) error {
 		return i.reply(ctx, r.threadID, r.messageID, fmt.Sprintf(inboxFailedFmt, r.failed[0]))
 	}
 	entry, hasTopic := i.topics.Entry(r.key)
-	if _, alive := i.agents(r.key); !alive || !hasTopic || !entry.Status.Live() {
+	agent, alive := i.agents(r.key)
+	if !alive || !hasTopic || !entry.Status.Live() {
 		i.log.Info("inbox delivery to exited agent", slog.String("key", r.key.String()), slog.Int("message_id", r.messageID))
 		return i.reply(ctx, r.threadID, r.messageID, fmt.Sprintf(inboxGoneFmt, strings.Join(baseNames(r.paths), ", ")))
+	}
+	// The attachment prompt ends with an Enter like any plain message, so a
+	// kept picker would take it as a choice: hold it back the same way.
+	if word, held := i.holdForPicker(r.key, agent); held {
+		i.log.Info("[FIX] attachment held back for open picker", slog.String("key", r.key.String()), slog.String("word", word),
+			slog.Int("thread_id", r.threadID), slog.Int("message_id", r.messageID), slog.Int("saved", len(r.paths)))
+		return i.reply(ctx, r.threadID, r.messageID, fmt.Sprintf(pickerRefusedFmt, "/"+word))
 	}
 	if err := i.herdr.Prompt(ctx, r.key.PaneID, domain.AttachmentPrompt(r.caption, r.paths)); err != nil {
 		return i.failed(ctx, msg, r.key, "prompt", err)

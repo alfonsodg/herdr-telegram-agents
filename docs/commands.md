@@ -111,8 +111,10 @@ sent: choose with /keys up, down, enter or close it with /stop, then send it
 again`. The hold is one-shot because the bridge cannot see whether the picker
 was closed at the desk: send the message again and it goes through. `/keys`,
 `/stop`, `/interrupt`, another of these commands, a change of the agent's
-status, or ten minutes release the hold without a refusal. Attachments and
-the free text after a ✏️ press are typed as before and are not held back.
+status, or ten minutes release the hold without a refusal. A photo or file
+sent first is held back the same way: it is saved to the inbox, but its
+prompt is not typed, so send it again. The free text after a ✏️ press is
+typed as before and is not held back.
 
 OpenCode's model picker is its own `/models`; send that command (it is in
 the `/` menu) and it behaves like the pickers above: the picker stays open

@@ -581,6 +581,32 @@ func TestInboundPickerHoldsNextPromptOnce(t *testing.T) {
 	}
 }
 
+// TestInboundPickerHoldsAttachment: a file sent while a kept picker may be
+// open is saved but not typed (its Enter would pick an option); the hold is
+// used up, so the resend goes through.
+func TestInboundPickerHoldsAttachment(t *testing.T) {
+	f := newBridgeFixture(t)
+	a := keptPicker(t, f)
+	f.tg.SetFile("p", []byte("x"))
+
+	if err := f.in.HandleAttachment(f.ctx, attachment(101, 43, domain.AttachmentPhoto, "p", "", "look", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.herdr.Prompts(); len(p) != 1 {
+		t.Fatalf("attachment typed into the picker: %v", p)
+	}
+	assertCallsEqual(t, f.tg, "download:p:20971520", "send:101:"+fmt.Sprintf(pickerRefusedFmt, "/model")+":reply=43")
+	if _, held := f.in.pickers[a.Key]; held {
+		t.Fatal("hold kept after the attachment used it")
+	}
+	if err := f.in.HandleAttachment(f.ctx, attachment(101, 44, domain.AttachmentPhoto, "p", "", "look", 1)); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.herdr.Prompts(); len(p) != 2 || !strings.HasPrefix(p[1], "p1: look\n\n") {
+		t.Fatalf("resend not typed: %v", p)
+	}
+}
+
 // TestInboundPickerHoldReleases: driving or closing the picker, another
 // forwarded command, a status change and pickerHold each release the hold,
 // so the next plain message is typed without a refusal.

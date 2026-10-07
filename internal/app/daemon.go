@@ -682,8 +682,14 @@ func (d *Daemon) checkRights(ctx context.Context) error {
 func (d *Daemon) onTelegramEvent(ctx context.Context, raw domain.Event) error {
 	switch ev := raw.(type) {
 	case domain.PrivateReachability:
+		// Any Telegram user can block the bot, so this update is not trusted
+		// to end the run: a broken sharing state or a failed save is logged
+		// and the daemon goes on.
 		if d.Sharing != nil {
-			return d.Sharing.Reachability(ctx, ev.RecipientID, ev.Unavailable, d.clock.Now())
+			if err := d.Sharing.Reachability(ctx, ev.RecipientID, ev.Unavailable, d.clock.Now()); err != nil {
+				d.log.Warn("[FIX] private reachability not recorded", slog.Int64("recipient_id", ev.RecipientID),
+					slog.Bool("unavailable", ev.Unavailable), slog.String("err", err.Error()))
+			}
 		}
 		return nil
 	case domain.RightsChanged:

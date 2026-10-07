@@ -25,7 +25,7 @@ const helpText = `Commands
 /stop: send esc to the agent (soft cancel of the running turn or dialog)
 /interrupt: send ctrl+c to the agent (hard interrupt)
 /close: close the agent's pane after a Yes/No confirmation
-/clear, /compact [instructions], /usage, /model [name]: typed into the agent as Claude Code commands while it is idle; the screen after the command is posted as a reply, /usage and a bare /model are closed with esc for you
+/clear, /compact [instructions], /usage, /model [name]: typed into the agent as its own command while it is idle; the screen after it is posted as a reply. On Claude Code /usage and a bare /model are closed with esc for you; other agents keep their picker open (choose with /keys, close with /stop) and your next plain message is held back once
 /status: this agent's status; in General, every agent with a link to its topic
 /away [2h]: treat you as away until /here or for the given time, so Telegram gets everything (General only)
 /here: back to automatic presence (General only)
@@ -46,6 +46,9 @@ const (
 	// pickerHint ends the screen post of an overlay command on an agent
 	// that keeps its picker open (every kind but Claude Code).
 	pickerHint = "picker left open: /keys up, down, enter to choose, /stop to close"
+	// pickerRefusedFmt answers the plain message held back by a kept
+	// picker; %s is the command that opened it.
+	pickerRefusedFmt = "⚠️ the %s picker may still be open, so this was not sent: choose with /keys up, down, enter or close it with /stop, then send it again"
 	// topicOnly answers an agent command written in General.
 	topicOnly = "agent commands live in the agent's topic"
 	// closePrefix marks the callback data of the /close keyboard; closeYes
@@ -135,6 +138,10 @@ type inbound struct {
 	// to do when it fires. Both are touched on the bridge goroutine only.
 	deb     *debouncer
 	pending map[domain.Key]followUp
+	// pickers are the pickers a forwarded command left open on a
+	// non-Claude agent; the next plain message is held back once. Bridge
+	// goroutine only.
+	pickers map[domain.Key]heldPicker
 	// git runs /git in the agent's directory; inbox keeps attachments.
 	// Either may be nil, which refuses the feature with a notice.
 	git   domain.GitRunner
@@ -160,6 +167,14 @@ type followUp struct {
 	messageID int
 }
 
+// heldPicker is a picker kept open by a forwarded command: the word that
+// opened it, the agent status when the screen was read, and when.
+type heldPicker struct {
+	word   string
+	status domain.Status
+	since  time.Time
+}
+
 func newInbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, topics *topicView, agents agentLookup,
 	live func() []domain.Agent, out *outbound, opts *Options, svc Services,
 	cfg domain.Config, clock domain.Clock, log *slog.Logger) *inbound {
@@ -178,6 +193,7 @@ func newInbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, topics *to
 		clock:   clock,
 		deb:     newDebouncer(clock, commandSettle, log),
 		pending: map[domain.Key]followUp{},
+		pickers: map[domain.Key]heldPicker{},
 		closing: map[domain.Key]int{},
 		albums:  map[string]*album{},
 	}
@@ -252,12 +268,18 @@ func (i *inbound) HandleTopic(ctx context.Context, msg domain.TopicMessage) erro
 	i.log.Debug("topic command text", slog.String("key", key.String()), slog.String("text", msg.Text), slog.Any("keys", cmd.Keys), slog.Int("lines", cmd.Lines))
 	switch cmd.Kind {
 	case domain.CmdPrompt:
+		if word, held := i.holdForPicker(key, agent); held {
+			i.log.Info("prompt held back for open picker", slog.String("key", key.String()), slog.String("word", word),
+				slog.Int("thread_id", msg.ThreadID), slog.Int("message_id", msg.MessageID), slog.Int("len", len(msg.Text)))
+			return i.reply(ctx, msg.ThreadID, msg.MessageID, fmt.Sprintf(pickerRefusedFmt, "/"+word))
+		}
 		if err := i.herdr.Prompt(ctx, key.PaneID, cmd.Text); err != nil {
 			return i.failed(ctx, msg, key, "prompt", err)
 		}
 		i.log.Debug("herdr call ok", slog.String("method", "prompt"), slog.String("key", key.String()), slog.Int("message_id", msg.MessageID))
 		return i.out.PromptSent(ctx, key, msg.ThreadID, msg.MessageID)
 	case domain.CmdKeys:
+		i.releasePicker(key, "keys")
 		return i.herdrCall(ctx, msg, key, "send_keys", func(ctx context.Context) error {
 			return i.herdr.SendKeys(ctx, key.PaneID, cmd.Keys)
 		})
@@ -268,8 +290,10 @@ func (i *inbound) HandleTopic(ctx context.Context, msg domain.TopicMessage) erro
 	case domain.CmdGit:
 		return i.gitCommand(ctx, msg, key, agent, cmd.Git)
 	case domain.CmdStop:
+		i.releasePicker(key, "stop")
 		return i.control(ctx, msg, key, "stop", domain.KeyEscape, stoppedReply)
 	case domain.CmdInterrupt:
+		i.releasePicker(key, "interrupt")
 		return i.control(ctx, msg, key, "interrupt", domain.KeyInterrupt, interruptedReply)
 	case domain.CmdClose:
 		return i.askClose(ctx, msg, key, agent)
@@ -394,9 +418,11 @@ func (i *inbound) PressClose(ctx context.Context, ev domain.ButtonPressed) error
 	return i.out.stale(ctx, ev, "unknown button")
 }
 
-// Forget drops the per-agent state of an agent that is gone: its /close
-// question needs no edit, the topic is closing anyway.
+// Forget drops the per-agent state of an agent that is gone: its picker
+// hold, and its /close question, which needs no edit since the topic is
+// closing anyway.
 func (i *inbound) Forget(key domain.Key) {
+	i.releasePicker(key, "gone")
 	if id, ok := i.closing[key]; ok {
 		i.log.Debug("close question dropped", slog.String("key", key.String()), slog.Int("message_id", id))
 		delete(i.closing, key)
@@ -416,6 +442,7 @@ func (i *inbound) Reassociate(from, to domain.Key) {
 		i.deb.ScheduleAfter(to, 0)
 	}
 	moveAgentState(i.closing, from, to)
+	moveAgentState(i.pickers, from, to)
 	for _, a := range i.albums {
 		if a.key == from {
 			a.key = to
@@ -431,6 +458,7 @@ func (i *inbound) Reassociate(from, to domain.Key) {
 // would interrupt it.
 func (i *inbound) forward(ctx context.Context, msg domain.TopicMessage, key domain.Key, agent domain.Agent, cmd domain.Command) error {
 	word := forwardWord(cmd.Text)
+	i.releasePicker(key, "forward")
 	if hint, refused := forwardRefusal(agent.Status); refused {
 		i.log.Info("command refused", slog.String("key", key.String()), slog.String("word", word),
 			slog.String("status", string(agent.Status)), slog.Int("message_id", msg.MessageID))
@@ -452,6 +480,40 @@ func (i *inbound) forward(ctx context.Context, msg domain.TopicMessage, key doma
 	i.deb.Schedule(key)
 	i.log.Debug("command follow-up scheduled", slog.String("key", key.String()), slog.String("word", word), slog.Int64("delay_ms", i.deb.delay.Milliseconds()))
 	return nil
+}
+
+// holdForPicker decides whether a plain message must be held back
+// because a forwarded command left a picker open on this agent. The hold
+// is one-shot: the bridge cannot see whether the picker was closed at the
+// desk, so the refusal releases it and a resend goes through. A hold whose
+// agent status moved on, or older than pickerHold, is released without a
+// refusal.
+func (i *inbound) holdForPicker(key domain.Key, agent domain.Agent) (string, bool) {
+	h, ok := i.pickers[key]
+	if !ok {
+		return "", false
+	}
+	switch {
+	case agent.Status != h.status:
+		i.releasePicker(key, "stale_status")
+		return "", false
+	case i.clock.Now().Sub(h.since) >= pickerHold:
+		i.releasePicker(key, "expired")
+		return "", false
+	}
+	i.releasePicker(key, "refused")
+	return h.word, true
+}
+
+// releasePicker drops the picker hold of an agent, if any.
+func (i *inbound) releasePicker(key domain.Key, reason string) {
+	h, ok := i.pickers[key]
+	if !ok {
+		return
+	}
+	delete(i.pickers, key)
+	i.log.Debug("picker hold cleared", slog.String("key", key.String()), slog.String("word", h.word),
+		slog.String("reason", reason), slog.Int64("age_ms", i.clock.Now().Sub(h.since).Milliseconds()))
 }
 
 // forwardRefusal names the statuses in which a forwarded command is not
@@ -541,6 +603,7 @@ func (i *inbound) Fire(ctx context.Context, key domain.Key) error {
 			slog.Int("bytes", len(text)), slog.String("kind", agent.Kind), slog.Bool("dismiss", dismiss), slog.Bool("picker_kept", keep))
 	}
 	if keep {
+		i.pickers[key] = heldPicker{word: f.word, status: agent.Status, since: i.clock.Now()}
 		i.log.Info("command picker kept", slog.String("key", key.String()), slog.String("word", f.word),
 			slog.String("kind", agent.Kind), slog.String("status", string(agent.Status)), slog.Int("thread_id", entry.ThreadID))
 		return nil

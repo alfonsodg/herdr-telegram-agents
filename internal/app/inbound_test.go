@@ -520,6 +520,124 @@ func TestInboundForwardModelOnCodexKeepsPicker(t *testing.T) {
 	}
 }
 
+// keptPicker leaves a Codex /model picker open on p1 and returns the agent.
+func keptPicker(t *testing.T, f *bridgeFixture) domain.Agent {
+	t.Helper()
+	a := f.withKind(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle), "codex")
+	f.herdr.SetScreen("p1", codexModelScreen)
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 40, "/model")); err != nil {
+		t.Fatal(err)
+	}
+	f.fireCommand(t, 1)
+	f.tg.Reset()
+	return a
+}
+
+// TestInboundPickerHoldsNextPromptOnce: live, Codex took a plain "hello" +
+// Enter as a picker choice. The first plain message after a kept picker is
+// held back with a reply; the resend goes through.
+func TestInboundPickerHoldsNextPromptOnce(t *testing.T) {
+	f := newBridgeFixture(t)
+	keptPicker(t, f)
+
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 41, "1")); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.herdr.Prompts(); len(p) != 1 {
+		t.Fatalf("held message typed: %v", p)
+	}
+	assertCallsEqual(t, f.tg, "send:101:"+fmt.Sprintf(pickerRefusedFmt, "/model")+":reply=41")
+	if log := f.logBuf.String(); !strings.Contains(log, `"msg":"prompt held back for open picker"`) || !strings.Contains(log, `"reason":"refused"`) {
+		t.Fatalf("hold not logged: %s", log)
+	}
+
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 42, "1")); err != nil {
+		t.Fatal(err)
+	}
+	if p := f.herdr.Prompts(); len(p) != 2 || p[1] != "p1: 1" {
+		t.Fatalf("resend not typed: %v", p)
+	}
+}
+
+// TestInboundPickerHoldReleases: driving or closing the picker, another
+// forwarded command, a status change and pickerHold each release the hold,
+// so the next plain message is typed without a refusal.
+func TestInboundPickerHoldReleases(t *testing.T) {
+	tests := []struct {
+		name   string
+		reason string
+		act    func(t *testing.T, f *bridgeFixture, a domain.Agent)
+	}{
+		{"keys", "keys", func(t *testing.T, f *bridgeFixture, _ domain.Agent) { handle(t, f, "/keys down") }},
+		{"stop", "stop", func(t *testing.T, f *bridgeFixture, _ domain.Agent) { handle(t, f, "/stop") }},
+		{"interrupt", "interrupt", func(t *testing.T, f *bridgeFixture, _ domain.Agent) { handle(t, f, "/interrupt") }},
+		{"forward", "forward", func(t *testing.T, f *bridgeFixture, _ domain.Agent) { handle(t, f, "/compact") }},
+		{"status", "stale_status", func(_ *testing.T, f *bridgeFixture, a domain.Agent) { f.setStatus(a, domain.StatusWorking) }},
+		{"expired", "expired", func(_ *testing.T, f *bridgeFixture, _ domain.Agent) { f.clock.Advance(pickerHold) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newBridgeFixture(t)
+			a := keptPicker(t, f)
+			tt.act(t, f, a)
+			before := len(f.herdr.Prompts())
+			f.tg.Reset()
+			handle(t, f, "hello")
+			if p := f.herdr.Prompts(); len(p) != before+1 || p[len(p)-1] != "p1: hello" {
+				t.Fatalf("Prompts = %v", p)
+			}
+			for _, c := range f.tg.Calls() {
+				if strings.Contains(c, "picker may still be open") {
+					t.Fatalf("refused after release: %v", f.tg.Calls())
+				}
+			}
+			if log := f.logBuf.String(); !strings.Contains(log, `"reason":"`+tt.reason+`"`) {
+				t.Fatalf("release reason %q not logged: %s", tt.reason, log)
+			}
+		})
+	}
+}
+
+// handle routes one topic message from the operator into thread 101.
+func handle(t *testing.T, f *bridgeFixture, text string) {
+	t.Helper()
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 50, text)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInboundClaudeOverlaySetsNoHold(t *testing.T) {
+	f := newBridgeFixture(t)
+	f.claude(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle))
+	f.herdr.SetScreen("p1", overlayScreen)
+	handle(t, f, "/usage")
+	f.fireCommand(t, 1)
+	if sent := f.tg.Sent(); len(sent) != 1 || sent[0].Footer != "" {
+		t.Fatalf("Sent = %+v", sent)
+	}
+	handle(t, f, "hello")
+	if p := f.herdr.Prompts(); len(p) != 2 || p[1] != "p1: hello" {
+		t.Fatalf("Prompts = %v", p)
+	}
+}
+
+func TestInboundPickerHoldFollowsKeyAndForget(t *testing.T) {
+	f := newBridgeFixture(t)
+	a := keptPicker(t, f)
+	next := domain.Key{PaneID: "p1", TerminalID: "t2"}
+	f.in.Reassociate(a.Key, next)
+	if _, ok := f.in.pickers[a.Key]; ok {
+		t.Fatal("hold left on the old key")
+	}
+	if h, ok := f.in.pickers[next]; !ok || h.word != "model" {
+		t.Fatalf("hold not moved: %+v", f.in.pickers)
+	}
+	f.in.Forget(next)
+	if len(f.in.pickers) != 0 {
+		t.Fatalf("hold kept after Forget: %+v", f.in.pickers)
+	}
+}
+
 func TestInboundForwardReadFailureOnCodexKeepsPicker(t *testing.T) {
 	f := newBridgeFixture(t)
 	f.withKind(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle), "codex")

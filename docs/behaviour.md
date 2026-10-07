@@ -313,7 +313,9 @@ the transcript is read for the line alone. A transcript last written
 before the turn's first `working` status belongs to an earlier turn (two
 Claude panes in one directory): its line is skipped and, in `Reply` /
 `Formatted` mode, the screen is posted instead with `stale transcript` in
-the `reply source unavailable` line.
+the `reply source unavailable` line. The daemon sees that first `working`
+status a beat after the agent began, so a reply written up to a few seconds
+before it still counts as this turn's.
 
 Long `Reply` and `Formatted` posts can arrive **folded** (`Fold long
 replies after` in the Posts group, default `20 lines`): every message part

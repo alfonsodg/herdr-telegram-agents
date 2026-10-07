@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -21,29 +23,61 @@ const (
 	// openCodeWaitDelay bounds how long a run waits for its pipes once the
 	// timeout killed opencode.
 	openCodeWaitDelay = time.Second
+	// openCodeTempDir is the private directory under the state dir that
+	// holds export files while they are read; openCodeTempPattern names
+	// them, so the start-up sweep removes only its own leftovers.
+	openCodeTempDir     = "tmp"
+	openCodeTempPattern = "opencode-export-*.json"
 )
 
 // OpenCodeExporter runs OpenCode's session export command from the binary on
 // PATH and returns its JSON. The session id Herdr reported for the pane is
 // passed as one argument, never through a shell.
+//
+// opencode cuts its stdout at 64 KiB multiples when stdout is a pipe and
+// still exits 0, so the child writes into a regular file instead: a private
+// temp file (0600) under the state dir, read back under the cap and removed
+// on every path.
 type OpenCodeExporter struct {
 	bin      string
+	tempDir  string
 	timeout  time.Duration
 	maxBytes int
 	log      *slog.Logger
 	run      func(*exec.Cmd) error
 }
 
-// NewOpenCodeExporter returns an exporter for "opencode" on PATH.
-func NewOpenCodeExporter(log *slog.Logger) *OpenCodeExporter {
+// NewOpenCodeExporter returns an exporter for "opencode" on PATH whose
+// export files live in <stateDir>/tmp. An empty stateDir uses the system
+// temp directory.
+func NewOpenCodeExporter(stateDir string, log *slog.Logger) *OpenCodeExporter {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &OpenCodeExporter{bin: "opencode", timeout: openCodeExportTimeout, maxBytes: openCodeExportMaxOutput, log: log}
+	return &OpenCodeExporter{bin: "opencode", tempDir: openCodeTempPath(stateDir), timeout: openCodeExportTimeout,
+		maxBytes: openCodeExportMaxOutput, log: log}
+}
+
+// openCodeTempPath is where export files go for stateDir.
+func openCodeTempPath(stateDir string) string {
+	if stateDir == "" {
+		return os.TempDir()
+	}
+	return filepath.Join(stateDir, openCodeTempDir)
+}
+
+// exportRun is the outcome of one opencode run: the output read back from
+// the export file, whether it was over the cap (then out is nil), and a
+// short category when the export file itself failed.
+type exportRun struct {
+	out      []byte
+	capped   bool
+	fileStep string
 }
 
 // Export runs the export for sessionID. A missing binary, a timeout, a
-// non-zero exit and output over the cap are all errors.
+// non-zero exit, output over the cap and a failing export file are all
+// errors.
 func (e *OpenCodeExporter) Export(ctx context.Context, sessionID string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, fmt.Errorf("opencode export: %w", err)
@@ -59,26 +93,15 @@ func (e *OpenCodeExporter) Export(ctx context.Context, sessionID string) ([]byte
 	childCtx, cancel := context.WithTimeout(parentCtx, e.timeout)
 	defer cancel()
 	start := time.Now()
-	run := e.run
-	if run == nil {
-		run = (*exec.Cmd).Run
-	}
-	runExport := func(args ...string) (*limitedWriter, error) {
-		cmd := command(childCtx, bin, args...)
-		cmd.WaitDelay = openCodeWaitDelay
-		stdout := &limitedWriter{max: e.maxBytes}
-		cmd.Stdout, cmd.Stderr = stdout, io.Discard
-		return stdout, run(cmd)
-	}
-	stdout, runErr := runExport("session", "export", sessionID)
+	result, runErr := e.runExport(childCtx, bin, "session", "export", sessionID)
 	// OpenCode 1.x used "opencode export". Confirm the major version
 	// before trying it: a failed 2.x export can mean an unavailable session,
 	// and "opencode export" on 2.x can open its interactive UI.
 	var firstExit *exec.ExitError
-	if errors.As(runErr, &firstExit) && childCtx.Err() == nil && !stdout.capped {
-		versionOut, versionErr := runExport("--version")
-		if versionErr == nil && !versionOut.capped && openCodeV1Version(versionOut.buf.String()) {
-			stdout, runErr = runExport("export", sessionID)
+	if errors.As(runErr, &firstExit) && childCtx.Err() == nil && !result.capped && result.fileStep == "" {
+		version, versionErr := e.runExport(childCtx, bin, "--version")
+		if versionErr == nil && version.fileStep == "" && !version.capped && openCodeV1Version(string(version.out)) {
+			result, runErr = e.runExport(childCtx, bin, "export", sessionID)
 		}
 	}
 	category := "ok"
@@ -86,7 +109,9 @@ func (e *OpenCodeExporter) Export(ctx context.Context, sessionID string) ([]byte
 		category = "parent_context"
 	} else if childCtx.Err() != nil {
 		category = "export_timeout"
-	} else if stdout.capped {
+	} else if result.fileStep != "" {
+		category = result.fileStep
+	} else if result.capped {
 		category = "output_cap"
 	} else if runErr != nil {
 		category = "run_failed"
@@ -100,22 +125,120 @@ func (e *OpenCodeExporter) Export(ctx context.Context, sessionID string) ([]byte
 		}
 	}
 	e.log.Debug("opencode export", slog.Int64("dur_ms", time.Since(start).Milliseconds()),
-		slog.Int("bytes", stdout.buf.Len()), slog.Bool("capped", stdout.capped),
+		slog.Int("bytes", len(result.out)), slog.Bool("capped", result.capped),
 		slog.String("category", category), slog.Int("exit_code", exitCode))
 	switch {
 	case parentCtx.Err() != nil:
 		return nil, fmt.Errorf("opencode export: %w", parentCtx.Err())
 	case childCtx.Err() != nil:
 		return nil, errors.New("opencode export: timed out")
-	case runErr == nil && !stdout.capped:
-		return stdout.buf.Bytes(), nil
-	case stdout.capped:
+	case result.fileStep != "":
+		return nil, fmt.Errorf("opencode export: %s failed", strings.ReplaceAll(result.fileStep, "_", " "))
+	case runErr == nil && !result.capped:
+		return result.out, nil
+	case result.capped:
 		return nil, fmt.Errorf("opencode export: output over %d bytes", e.maxBytes)
 	}
 	if exitErr != nil {
 		return nil, fmt.Errorf("opencode export: exit code %d", exitCode)
 	}
 	return nil, fmt.Errorf("opencode export: start or wait failed")
+}
+
+// runExport runs opencode with args, its stdout in a fresh export file.
+// The file is closed and removed before returning whatever happened; its
+// size is checked before it is read, and a Stat, Seek or read failure is
+// reported as fileStep with a nil output. runErr is the child's own result.
+func (e *OpenCodeExporter) runExport(ctx context.Context, bin string, args ...string) (exportRun, error) {
+	if err := os.MkdirAll(e.tempDir, 0o700); err != nil {
+		e.log.Debug("opencode export file", slog.String("step", "temp_dir"), slog.String("err", errorKind(err)))
+		return exportRun{fileStep: "temp_file"}, nil
+	}
+	file, err := os.CreateTemp(e.tempDir, openCodeTempPattern)
+	if err != nil {
+		e.log.Debug("opencode export file", slog.String("step", "create"), slog.String("err", errorKind(err)))
+		return exportRun{fileStep: "temp_file"}, nil
+	}
+	name := file.Name()
+	defer func() {
+		// Close before remove: Windows cannot remove an open file.
+		_ = file.Close()
+		if err := os.Remove(name); err != nil && !errors.Is(err, os.ErrNotExist) {
+			e.log.Debug("opencode export file", slog.String("step", "temp_remove_failed"),
+				slog.String("name", filepath.Base(name)), slog.String("err", errorKind(err)))
+		}
+	}()
+	cmd := command(ctx, bin, args...)
+	cmd.WaitDelay = openCodeWaitDelay
+	cmd.Stdout, cmd.Stderr = file, io.Discard
+	run := e.run
+	if run == nil {
+		run = (*exec.Cmd).Run
+	}
+	runErr := run(cmd)
+	info, err := file.Stat()
+	if err != nil {
+		e.log.Debug("opencode export file", slog.String("step", "stat"), slog.String("err", errorKind(err)))
+		return exportRun{fileStep: "temp_read"}, runErr
+	}
+	if info.Size() > int64(e.maxBytes) {
+		return exportRun{capped: true}, runErr
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		e.log.Debug("opencode export file", slog.String("step", "seek"), slog.String("err", errorKind(err)))
+		return exportRun{fileStep: "temp_read"}, runErr
+	}
+	out, err := io.ReadAll(io.LimitReader(file, int64(e.maxBytes)+1))
+	if err != nil {
+		e.log.Debug("opencode export file", slog.String("step", "read"), slog.String("err", errorKind(err)))
+		return exportRun{fileStep: "temp_read"}, runErr
+	}
+	// The child may have written more between Stat and the read.
+	if len(out) > e.maxBytes {
+		return exportRun{capped: true}, runErr
+	}
+	return exportRun{out: out}, runErr
+}
+
+// errorKind names an OS error without its path, which holds the temp file
+// name under the user's state dir.
+func errorKind(err error) string {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Op + ": " + pathErr.Err.Error()
+	}
+	return err.Error()
+}
+
+// SweepOpenCodeExports removes export files a crashed daemon left in
+// <stateDir>/tmp. Only the daemon exports and it is single-instance, so
+// nothing is in flight when it starts. A missing directory is not an
+// error. It returns how many files were removed.
+func SweepOpenCodeExports(stateDir string, log *slog.Logger) int {
+	if log == nil {
+		log = slog.New(slog.DiscardHandler)
+	}
+	if stateDir == "" {
+		return 0
+	}
+	matches, err := filepath.Glob(filepath.Join(openCodeTempPath(stateDir), openCodeTempPattern))
+	if err != nil {
+		log.Debug("opencode export sweep failed", slog.String("err", err.Error()))
+		return 0
+	}
+	removed := 0
+	for _, path := range matches {
+		if err := os.Remove(path); err != nil {
+			log.Debug("opencode export leftover not removed", slog.String("name", filepath.Base(path)), slog.String("err", errorKind(err)))
+			continue
+		}
+		removed++
+	}
+	if removed > 0 {
+		log.Info("opencode export leftovers removed", slog.Int("count", removed))
+	}
+	log.Debug("opencode export sweep", slog.Int("found", len(matches)), slog.Int("removed", removed))
+	return removed
 }
 
 func openCodeV1Version(version string) bool {

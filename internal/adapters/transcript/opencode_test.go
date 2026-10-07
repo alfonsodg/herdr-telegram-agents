@@ -289,3 +289,53 @@ func TestOpenCodeReaderKeepsPaneSessionsSeparate(t *testing.T) {
 		t.Fatalf("reconciled session = %v, exported %v", err, exported)
 	}
 }
+
+// TestOpenCodeLastReplyTurnStillRunning: opencode completes a message and
+// can report done or idle at every step, so a read whose newest record is
+// tool work, or that has no assistant text yet, answers ErrReplyPending
+// instead of a fragment. ErrReplyPending is still an ErrNoReply.
+func TestOpenCodeLastReplyTurnStillRunning(t *testing.T) {
+	for name, out := range map[string]string{
+		"last record is a tool": `{"info":{"id":"ses_abc"},"messages":[
+			{"info":{"role":"user","time":{"created":1}},"parts":[{"type":"text","text":"go"}]},
+			{"info":{"role":"assistant","time":{"created":2,"completed":3}},"parts":[{"type":"text","text":"first step"}]},
+			{"info":{"role":"assistant","time":{"created":4}},"parts":[{"type":"tool","tool":"bash","state":{"status":"completed"}}]}]}`,
+		"tool after text in one message": `{"info":{"id":"ses_abc"},"messages":[
+			{"info":{"role":"user","time":{"created":1}},"parts":[{"type":"text","text":"go"}]},
+			{"info":{"role":"assistant","time":{"created":2}},"parts":[{"type":"text","text":"let me look"},{"type":"tool","tool":"read"}]}]}`,
+		"no assistant message yet": `{"info":{"id":"ses_abc"},"messages":[
+			{"info":{"role":"user","time":{"created":1}},"parts":[{"type":"text","text":"go"}]}]}`,
+		"v2 tool last": `{"info":{"id":"ses_abc"},"messages":[
+			{"type":"user","time":{"created":1},"content":[{"type":"text","text":"go"}]},
+			{"type":"assistant","time":{"created":2},"content":[{"type":"text","text":"checking"},{"type":"tool","tool":"bash"}]}]}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &openCodeFixture{tuple: openCodeTuple, out: out}
+			_, err := f.reader().LastReply(context.Background(), openCodeAgent(openCodeTuple.Digest()))
+			if !errors.Is(err, domain.ErrReplyPending) || !errors.Is(err, domain.ErrNoReply) {
+				t.Fatalf("err = %v, want ErrReplyPending", err)
+			}
+			if !strings.Contains(f.logBuf.String(), "opencode reply pending") || strings.Contains(f.logBuf.String(), "ses_abc") {
+				t.Fatalf("pending log missing or leaks the session: %s", f.logBuf.String())
+			}
+		})
+	}
+}
+
+// TestOpenCodeLastReplyBookkeepingAfterText: reasoning, patches and step
+// markers after the final text do not make the turn pending.
+func TestOpenCodeLastReplyBookkeepingAfterText(t *testing.T) {
+	const doc = `{"info":{"id":"ses_abc"},"messages":[
+		{"info":{"role":"user","time":{"created":1}},"parts":[{"type":"text","text":"go"}]},
+		{"info":{"role":"assistant","time":{"created":2,"completed":3}},"parts":[
+			{"type":"tool","tool":"bash","state":{"status":"completed"}},
+			{"type":"text","text":"All done."},
+			{"type":"reasoning","text":"wrap up"},
+			{"type":"patch"},
+			{"type":"step-finish"}]}]}`
+	f := &openCodeFixture{tuple: openCodeTuple, out: doc}
+	r, err := f.reader().LastReply(context.Background(), openCodeAgent(openCodeTuple.Digest()))
+	if err != nil || r.Text != "All done." {
+		t.Fatalf("reply = %q, %v", r.Text, err)
+	}
+}

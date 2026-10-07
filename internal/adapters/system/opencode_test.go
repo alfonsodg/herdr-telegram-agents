@@ -28,7 +28,7 @@ func fakeOpenCode(t *testing.T, body string) string {
 }
 
 func TestOpenCodeExporterRunsExport(t *testing.T) {
-	e := NewOpenCodeExporter(nil)
+	e := NewOpenCodeExporter(t.TempDir(), nil)
 	e.bin = fakeOpenCode(t, `if [ "$1" = --version ]; then echo 'opencode 1.25.0'; exit 0; fi
 [ "$1" = export ] && [ "$2" = ses_abc ] && [ $# -eq 2 ] || exit 3
 echo '{"messages":[]}'
@@ -40,7 +40,7 @@ echo '{"messages":[]}'
 }
 
 func TestOpenCodeExporterRunsV2SessionExport(t *testing.T) {
-	e := NewOpenCodeExporter(nil)
+	e := NewOpenCodeExporter(t.TempDir(), nil)
 	e.bin = fakeOpenCode(t, `[ "$1" = session ] && [ "$2" = export ] && [ "$3" = ses_abc ] && [ $# -eq 3 ] || exit 3
 echo '{"messages":[]}'
 `)
@@ -51,7 +51,7 @@ echo '{"messages":[]}'
 }
 
 func TestOpenCodeExporterV2FailureDoesNotStartLegacyCommand(t *testing.T) {
-	e := NewOpenCodeExporter(nil)
+	e := NewOpenCodeExporter(t.TempDir(), nil)
 	e.bin = fakeOpenCode(t, `if [ "$1" = session ] && [ "$2" = export ]; then exit 4; fi
 if [ "$1" = --version ]; then echo 'opencode v2.0.18'; exit 0; fi
 echo 'unexpected legacy command'
@@ -67,7 +67,7 @@ func TestOpenCodeExporterDiscardsStderr(t *testing.T) {
 	for _, exit := range []string{"0", "1"} {
 		t.Run(exit, func(t *testing.T) {
 			var logs bytes.Buffer
-			e := NewOpenCodeExporter(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+			e := NewOpenCodeExporter(t.TempDir(), slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 			e.bin = fakeOpenCode(t, "printf '{\"messages\":[]}'\nprintf 'ses_private secret_private' >&2\nhead -c 1048577 /dev/zero >&2\nexit "+exit+"\n")
 			out, err := e.Export(context.Background(), "ses_abc")
 			if exit == "0" && (err != nil || string(out) != `{"messages":[]}`) {
@@ -86,7 +86,7 @@ func TestOpenCodeExporterDiscardsStderr(t *testing.T) {
 }
 
 func TestOpenCodeExporterCapIsAnError(t *testing.T) {
-	e := NewOpenCodeExporter(nil)
+	e := NewOpenCodeExporter(t.TempDir(), nil)
 	e.bin = fakeOpenCode(t, "i=0; while [ $i -lt 100 ]; do echo 'padding padding padding'; i=$((i+1)); done\n")
 	e.maxBytes = 64
 	if _, err := e.Export(context.Background(), "ses_abc"); err == nil || !strings.Contains(err.Error(), "output over") {
@@ -95,7 +95,7 @@ func TestOpenCodeExporterCapIsAnError(t *testing.T) {
 }
 
 func TestOpenCodeExporterExactCap(t *testing.T) {
-	e := NewOpenCodeExporter(nil)
+	e := NewOpenCodeExporter(t.TempDir(), nil)
 	e.bin = fakeOpenCode(t, "printf 12345678\n")
 	e.maxBytes = 8
 	if out, err := e.Export(context.Background(), "ses_abc"); err != nil || string(out) != "12345678" {
@@ -108,7 +108,7 @@ func TestOpenCodeExporterExactCap(t *testing.T) {
 }
 
 func TestOpenCodeExporterContext(t *testing.T) {
-	e := NewOpenCodeExporter(nil)
+	e := NewOpenCodeExporter(t.TempDir(), nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := e.Export(ctx, "ses_abc"); !errors.Is(err, context.Canceled) {
@@ -130,7 +130,7 @@ func TestOpenCodeExporterContext(t *testing.T) {
 
 func TestOpenCodeExporterChildTimeoutKeepsParentAlive(t *testing.T) {
 	var logs bytes.Buffer
-	e := NewOpenCodeExporter(slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	e := NewOpenCodeExporter(t.TempDir(), slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	e.bin = fakeOpenCode(t, "exit 0\n")
 	e.timeout = -time.Second
 	e.run = func(cmd *exec.Cmd) error { return cmd.Run() }
@@ -146,7 +146,7 @@ func TestOpenCodeExporterChildTimeoutKeepsParentAlive(t *testing.T) {
 }
 
 func TestOpenCodeExporterMissingBinary(t *testing.T) {
-	e := NewOpenCodeExporter(nil)
+	e := NewOpenCodeExporter(t.TempDir(), nil)
 	e.bin = "opencode-definitely-missing-binary"
 	if _, err := e.Export(context.Background(), "ses_abc"); err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Fatalf("err = %v", err)
@@ -154,11 +154,129 @@ func TestOpenCodeExporterMissingBinary(t *testing.T) {
 }
 
 func TestOpenCodeExporterRejectsBadSessionID(t *testing.T) {
-	e := NewOpenCodeExporter(nil)
+	e := NewOpenCodeExporter(t.TempDir(), nil)
 	e.bin = "opencode-definitely-missing-binary" // never reached
 	for _, id := range []string{"", "--help", "-x"} {
 		if _, err := e.Export(context.Background(), id); err == nil || !strings.Contains(err.Error(), "invalid session id") {
 			t.Fatalf("Export(%q) err = %v", id, err)
 		}
+	}
+}
+
+// TestOpenCodeExporterUsesAPrivateFile: opencode cuts piped stdout at
+// 64 KiB multiples and still exits 0, so the child writes into a 0600
+// file under <state>/tmp that is gone once Export returns.
+func TestOpenCodeExporterUsesAPrivateFile(t *testing.T) {
+	state := t.TempDir()
+	e := NewOpenCodeExporter(state, nil)
+	e.bin = fakeOpenCode(t, `printf '{"messages":[]}'`)
+	var name string
+	e.run = func(cmd *exec.Cmd) error {
+		f, ok := cmd.Stdout.(*os.File)
+		if !ok {
+			t.Fatalf("stdout is %T, want *os.File: opencode truncates piped output", cmd.Stdout)
+		}
+		name = f.Name()
+		if filepath.Dir(name) != filepath.Join(state, "tmp") {
+			t.Fatalf("export file %s is outside %s", name, filepath.Join(state, "tmp"))
+		}
+		if info, err := f.Stat(); err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+			t.Fatalf("export file mode = %v, %v; want 0600", info.Mode().Perm(), err)
+		}
+		return cmd.Run()
+	}
+	out, err := e.Export(context.Background(), "ses_abc")
+	if err != nil || string(out) != `{"messages":[]}` {
+		t.Fatalf("Export = %q, %v", out, err)
+	}
+	if _, statErr := os.Stat(name); !os.IsNotExist(statErr) {
+		t.Fatalf("export file left behind: %v", statErr)
+	}
+}
+
+// TestOpenCodeExporterReadsPast64KiB: an export larger than a pipe buffer
+// comes back whole.
+func TestOpenCodeExporterReadsPast64KiB(t *testing.T) {
+	e := NewOpenCodeExporter(t.TempDir(), nil)
+	e.bin = fakeOpenCode(t, `printf '{"text":"'; head -c 200000 /dev/zero | tr '\0' a; printf '"}'`)
+	out, err := e.Export(context.Background(), "ses_abc")
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if want := 200000 + len(`{"text":""}`); len(out) != want {
+		t.Fatalf("len(out) = %d, want %d", len(out), want)
+	}
+}
+
+// TestOpenCodeExporterRemovesFileOnFailure: the export file is removed on
+// a non-zero exit, over the cap and on a timeout too.
+func TestOpenCodeExporterRemovesFileOnFailure(t *testing.T) {
+	for name, tc := range map[string]struct {
+		body    string
+		max     int
+		timeout time.Duration
+	}{
+		"exit":    {body: "printf partial\nexit 2\n"},
+		"cap":     {body: "printf 123456789\n", max: 8},
+		"timeout": {body: "exit 0\n", timeout: -time.Second},
+	} {
+		t.Run(name, func(t *testing.T) {
+			state := t.TempDir()
+			e := NewOpenCodeExporter(state, nil)
+			e.bin = fakeOpenCode(t, tc.body)
+			if tc.max > 0 {
+				e.maxBytes = tc.max
+			}
+			if tc.timeout != 0 {
+				e.timeout = tc.timeout
+			}
+			if out, err := e.Export(context.Background(), "ses_abc"); err == nil || out != nil {
+				t.Fatalf("Export = %q, %v; want an error", out, err)
+			}
+			left, _ := filepath.Glob(filepath.Join(state, "tmp", "*"))
+			if len(left) != 0 {
+				t.Fatalf("files left behind: %v", left)
+			}
+		})
+	}
+}
+
+// TestOpenCodeExporterTempDirFailure: an export file that cannot be
+// created is an error, without running opencode.
+func TestOpenCodeExporterTempDirFailure(t *testing.T) {
+	state := t.TempDir()
+	if err := os.WriteFile(filepath.Join(state, "tmp"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e := NewOpenCodeExporter(state, nil)
+	e.bin = fakeOpenCode(t, "exit 0\n")
+	ran := false
+	e.run = func(cmd *exec.Cmd) error { ran = true; return cmd.Run() }
+	if out, err := e.Export(context.Background(), "ses_abc"); err == nil || out != nil || ran || !strings.Contains(err.Error(), "temp file") {
+		t.Fatalf("Export = %q, %v, ran = %v", out, err, ran)
+	}
+}
+
+func TestSweepOpenCodeExports(t *testing.T) {
+	state := t.TempDir()
+	if got := SweepOpenCodeExports(state, nil); got != 0 {
+		t.Fatalf("missing dir sweep = %d", got)
+	}
+	dir := filepath.Join(state, "tmp")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"opencode-export-1.json", "opencode-export-2.json", "keep.json", "opencode-export-3.txt"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var logs bytes.Buffer
+	if got := SweepOpenCodeExports(state, slog.New(slog.NewJSONHandler(&logs, nil))); got != 2 {
+		t.Fatalf("sweep removed %d, want 2", got)
+	}
+	left, _ := filepath.Glob(filepath.Join(dir, "*"))
+	if len(left) != 2 || !strings.Contains(logs.String(), `"count":2`) {
+		t.Fatalf("left = %v, logs = %s", left, logs.String())
 	}
 }

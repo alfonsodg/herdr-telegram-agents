@@ -69,6 +69,11 @@ var (
 	// no text after the last prompt. Wrapped with the reason; the caller
 	// falls back to the screen.
 	ErrNoReply = errors.New("no reply available")
+	// ErrReplyPending means the reply source found the agent's session but
+	// its newest turn is still running, so whatever text exists is a
+	// fragment. It wraps ErrNoReply: a caller that only knows ErrNoReply
+	// falls back as before, one that knows this may wait and ask again.
+	ErrReplyPending = fmt.Errorf("%w: reply not ready yet", ErrNoReply)
 	// ErrFileTooBig means an attachment is larger than the inbox allows or
 	// than Telegram lets a bot download.
 	ErrFileTooBig = errors.New("file is too big")

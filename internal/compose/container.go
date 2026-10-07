@@ -247,6 +247,20 @@ func BuildSupervisor(env PluginEnv, log *slog.Logger) *Supervisor {
 	return app.NewSupervisor(pid, proc, realClock{}, log)
 }
 
+// replySources is the reader chain behind done posts and /screen: Claude
+// Code transcripts by working directory, then the exact-session OpenCode
+// export and Codex rollout. Each reader rejects the kinds it does not know
+// with ErrNoReply, and the chain keeps OpenCode's ErrReplyPending over the
+// Codex reader's "unsupported agent".
+func replySources(session func(context.Context, string) (domain.SessionTuple, error),
+	openCodeExport func(context.Context, string) ([]byte, error), log *slog.Logger) domain.MultiReplySource {
+	return domain.MultiReplySource{
+		transcript.NewReader(log),
+		transcript.NewOpenCodeReader(session, openCodeExport, log),
+		transcript.NewCodexReader(session, log),
+	}
+}
+
 // cleanUpdateArtifacts removes staged update workers and backups left by
 // earlier updates. The current job keeps its own until it succeeded, and
 // nothing is touched while an update worker holds the lock (the daemon may
@@ -397,12 +411,12 @@ func BuildDaemon(ctx context.Context, env PluginEnv, cfg domain.Config, log *slo
 	capture := app.NewCapture(hg, registry.Live, clock, log)
 	inbox := state.NewInbox(env.StateDir, log)
 	inbox.MaxTotal = opts.InboxMaxTotalBytes
+	// One exporter serves the topic posts and the private mirror; its export
+	// files live under the state dir, and a crash's leftovers go now.
+	system.SweepOpenCodeExports(env.StateDir, log)
+	openCodeExport := system.NewOpenCodeExporter(env.StateDir, log).Export
 	bridge := app.NewBridge(cfg, hg, tg, registry, reconciler, capture, opts,
-		app.Services{Replies: domain.MultiReplySource{
-			transcript.NewReader(log),
-			transcript.NewOpenCodeReader(hg.AgentSession, system.NewOpenCodeExporter(log).Export, log),
-			transcript.NewCodexReader(hg.AgentSession, log),
-		}, Git: system.NewGitRunner(log), Inbox: inbox, Config: state.NewConfigStore(env.ConfigDir, log),
+		app.Services{Replies: replySources(hg.AgentSession, openCodeExport, log), Git: system.NewGitRunner(log), Inbox: inbox, Config: state.NewConfigStore(env.ConfigDir, log),
 			Updates: BuildUpdateManager(env, log), UpdateJobs: state.NewUpdateStore(env.StateDir, log),
 			LaunchUpdate:  func(ctx context.Context, id string) (int, error) { return LaunchUpdateWorker(ctx, env, id, log) },
 			UpdateRunning: func() bool { return BuildSupervisor(env, log).Status().Running }}, clock, log)
@@ -431,7 +445,7 @@ func BuildDaemon(ctx context.Context, env PluginEnv, cfg domain.Config, log *slo
 	bridge.PrivateReconciler = privateReconciler
 	bridge.SetPrivateControl(&app.PrivateControl{Sharing: d.Sharing, Telegram: privateTelegram, Transport: tg, Herdr: hg, Git: system.NewGitRunner(log), Inbox: inbox, Agent: registry.Agent, Now: clock.Now})
 
-	privateOutput := &app.PrivateOutput{Control: bridge.PrivateControl, Capture: capture, ExactReplies: transcript.NewOpenCodeReader(hg.AgentSession, system.NewOpenCodeExporter(log).Export, log), Automatic: opts.SyncEnabled}
+	privateOutput := &app.PrivateOutput{Control: bridge.PrivateControl, Capture: capture, ExactReplies: transcript.NewOpenCodeReader(hg.AgentSession, openCodeExport, log), Automatic: opts.SyncEnabled}
 	bridge.PrivateControl.Output = privateOutput
 	bridge.PrivateControl.Read = privateOutput.Read
 	privateDashboard := app.NewPrivateDashboard(bridge.PrivateControl, privateReconciler, cfg.BotUsername, tg)

@@ -10,11 +10,16 @@ import (
 // doesn't understand with ErrNoReply, so this never needs to dispatch by
 // kind itself; order among sources that could both answer does not matter
 // in practice because no two sources currently claim the same kind.
+// When every source fails, ErrReplyPending from any of them wins over the
+// plain ErrNoReply of the others: the reader that owns the agent's kind
+// said "not yet", and a later reader's "unsupported agent" must not hide
+// it.
 type MultiReplySource []ReplySource
 
 // LastReply implements ReplySource.
 func (m MultiReplySource) LastReply(ctx context.Context, agent Agent) (Reply, error) {
 	lastErr := error(ErrNoReply)
+	var pending error
 	for _, s := range m {
 		if err := ctx.Err(); err != nil {
 			return Reply{}, err
@@ -29,7 +34,13 @@ func (m MultiReplySource) LastReply(ctx context.Context, agent Agent) (Reply, er
 		if !errors.Is(err, ErrNoReply) {
 			return Reply{}, err
 		}
+		if pending == nil && errors.Is(err, ErrReplyPending) {
+			pending = err
+		}
 		lastErr = err
+	}
+	if pending != nil {
+		return Reply{}, pending
 	}
 	return Reply{}, lastErr
 }

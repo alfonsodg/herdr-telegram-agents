@@ -28,6 +28,11 @@ var openCodeEditTools = map[string]bool{"edit": true, "write": true}
 // and a tuple whose digest differs from the topic's key means the pane now
 // runs another session, so the reader answers ErrNoReply rather than post
 // that session's reply into this topic.
+//
+// opencode completes a message, and Herdr can report done or idle, at every
+// step of a turn. A read whose newest record is tool work answers
+// domain.ErrReplyPending: the turn is not over and the text so far is a
+// fragment. That is the one failure the caller may retry.
 type OpenCodeReader struct {
 	session func(ctx context.Context, paneID string) (domain.SessionTuple, error)
 	export  func(ctx context.Context, sessionID string) ([]byte, error)
@@ -87,6 +92,10 @@ func (r *OpenCodeReader) LastReply(ctx context.Context, agent domain.Agent) (dom
 		return domain.Reply{}, fmt.Errorf("%w: opencode exported another session", domain.ErrNoReply)
 	}
 	text, meta, err := openCodeLastReply(doc.Messages)
+	if errors.Is(err, domain.ErrReplyPending) {
+		r.log.Debug("opencode reply pending", slog.String("pane", agent.PaneID), slog.Int("bytes", len(out)),
+			slog.Int("messages_after_prompt", len(doc.Messages)-openCodeTurnStart(doc.Messages)))
+	}
 	if err != nil {
 		return domain.Reply{}, err
 	}
@@ -167,12 +176,10 @@ type openCodePart struct {
 // with tool calls is several messages that read as one reply. The meta
 // covers the same turn: the prompt's time, the last assistant message's
 // completion, its model, the output tokens of every step and the files
-// edited, in the order first met.
+// edited, in the order first met. A turn whose newest record is tool work,
+// or that has no assistant text yet, is still running: ErrReplyPending.
 func openCodeLastReply(messages []openCodeMessage) (string, domain.TurnMeta, error) {
-	start := len(messages)
-	for start > 0 && messages[start-1].role() != "user" {
-		start--
-	}
+	start := openCodeTurnStart(messages)
 	if start == 0 {
 		return "", domain.TurnMeta{}, fmt.Errorf("%w: no user prompt in export", domain.ErrNoReply)
 	}
@@ -205,10 +212,46 @@ func openCodeLastReply(messages []openCodeMessage) (string, domain.TurnMeta, err
 			}
 		}
 	}
-	if len(texts) == 0 {
-		return "", domain.TurnMeta{}, fmt.Errorf("%w: no text after the last prompt", domain.ErrNoReply)
+	if !openCodeTurnSettled(messages[start:]) {
+		return "", domain.TurnMeta{}, fmt.Errorf("%w: the turn is still running", domain.ErrReplyPending)
 	}
 	return strings.Join(texts, "\n\n"), meta, nil
+}
+
+// openCodeTurnStart is the index of the first message after the last user
+// prompt; 0 when there is no prompt.
+func openCodeTurnStart(messages []openCodeMessage) int {
+	start := len(messages)
+	for start > 0 && messages[start-1].role() != "user" {
+		start--
+	}
+	return start
+}
+
+// openCodeTurnSettled reports whether the newest activity of the turn is
+// text rather than tool work: the last non-empty text part of the
+// assistant messages comes after their last tool part. Reasoning, patches
+// and step markers are bookkeeping and count as neither.
+func openCodeTurnSettled(messages []openCodeMessage) bool {
+	textPos, toolPos := -1, -1
+	pos := 0
+	for _, m := range messages {
+		if m.role() != "assistant" {
+			continue
+		}
+		for _, p := range m.parts() {
+			pos++
+			switch p.Type {
+			case "text":
+				if strings.TrimSpace(p.Text) != "" {
+					textPos = pos
+				}
+			case "tool":
+				toolPos = pos
+			}
+		}
+	}
+	return textPos > toolPos
 }
 
 func (m openCodeMessage) role() string {

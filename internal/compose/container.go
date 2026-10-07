@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/permgps/herdr-telegram-agents/internal/adapters/github"
@@ -91,6 +92,7 @@ func BuildDoctor(env PluginEnv, version string, log *slog.Logger) *Doctor {
 	}
 	proc := system.NewProcess(env.StateDir, log)
 	mappings := state.NewMappingStore(env.StateDir, log)
+	claudeUsage := claudeUsageFile(env)
 	return &app.Doctor{
 		Version:       version,
 		Config:        state.NewConfigStore(env.ConfigDir, log),
@@ -105,9 +107,53 @@ func BuildDoctor(env PluginEnv, version string, log *slog.Logger) *Doctor {
 		},
 		Herdr:              herdr.NewGateway(env.SocketPath, log, herdr.DefaultBackoff),
 		SupportedProtocols: herdr.SupportedProtocolVersions(),
+		ClaudeUsage:        claudeUsage,
+		ClaudeTap:          claudeTapCommand(env, claudeUsage.Path()),
+		CodexUsage:         transcript.NewCodexUsage(log),
 		Clock:              realClock{},
 		Log:                log,
 	}
+}
+
+// claudeUsageFile is the status line tap's file under the state dir.
+func claudeUsageFile(env PluginEnv) *state.ClaudeUsageFile {
+	return state.NewClaudeUsageFile(filepath.Join(env.StateDir, state.ClaudeUsageFileName))
+}
+
+// quotaSources lists the quota providers in display order.
+func quotaSources(claude *state.ClaudeUsageFile, log *slog.Logger) []app.QuotaSource {
+	return []app.QuotaSource{
+		{Provider: domain.UsageClaude, Source: claude},
+		{Provider: domain.UsageCodex, Source: transcript.NewCodexUsage(log)},
+	}
+}
+
+// claudeTapCommand is the status line command prefix doctor suggests: the
+// running binary (the plugin's bin/herdr-tg) with the tap's file. Paths
+// with spaces are single-quoted for the shell Claude Code runs it in.
+func claudeTapCommand(env PluginEnv, file string) string {
+	exe, err := os.Executable()
+	if err != nil || exe == "" {
+		exe = filepath.Join(env.Root, "bin", "herdr-tg")
+	}
+	return shellWord(exe) + " usage-tap --out " + shellWord(file)
+}
+
+// shellWord quotes s for a POSIX shell when it holds anything but plain
+// path characters; a backslash counts as special, so a Windows path keeps
+// its separators in a POSIX shell.
+func shellWord(s string) string {
+	plain := s != ""
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("/._-+:", r)) {
+			plain = false
+			break
+		}
+	}
+	if plain {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // StartControl opens the daemon's control channel and serves it until ctx
@@ -227,7 +273,7 @@ func TightenPermissions(env PluginEnv, log *slog.Logger) int {
 	if env.StateDir != "" {
 		dirs = append(dirs, env.StateDir, filepath.Join(env.StateDir, state.InboxDirName))
 		names := []string{
-			state.MappingFileName, state.SharingFileName, state.UpdateFileName, state.PidFileName,
+			state.MappingFileName, state.SharingFileName, state.UpdateFileName, state.PidFileName, state.ClaudeUsageFileName,
 			logging.LogFileName, system.ErrLogFileName, system.UpdateWorkerErrLogFileName,
 		}
 		for i := 1; i <= logging.RotateKeep; i++ {
@@ -438,6 +484,9 @@ func BuildDaemon(ctx context.Context, env PluginEnv, cfg domain.Config, log *slo
 	presence := app.NewPresence(system.NewIdleSource(log), opts, clock, log)
 	d = app.NewDaemon(cfg, hg, tg, registry, reconciler, bridge, capture, state.NewConfigStore(env.ConfigDir, log), opts, presence, clock, log)
 	d.SetInbox(inbox)
+	claudeUsage := claudeUsageFile(env)
+	log.Info("quota sources", slog.String("claude_file", claudeUsage.Path()), slog.Bool("codex", true))
+	d.SetQuota(app.NewQuota(quotaSources(claudeUsage, log), opts, clock, log))
 	d.Sharing = app.NewSharing(ctx, state.NewSharingStore(env.StateDir, log), log)
 	d.Sharing.BotID = tg.ConnectedBotID()
 	d.Sharing.Agent = registry.Agent

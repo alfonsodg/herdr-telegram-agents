@@ -527,3 +527,47 @@ func TestDashboardFatalErrorIsReturned(t *testing.T) {
 		t.Fatal("automatic retry ignored unresolved intent")
 	}
 }
+
+func TestDashboardQuotaLines(t *testing.T) {
+	f := newDashFixture(t)
+	if err := f.opts.Set(f.ctx, domain.OptionSyncQuota, "true", 1); err != nil {
+		t.Fatal(err)
+	}
+	codex := &fakeUsage{}
+	codex.set(usageOf(domain.UsageCodex, tb0, domain.UsageWindow{Label: "7d", UsedPercent: 3, ResetsAt: tb0.Add(4*24*time.Hour + 2*time.Hour + 30*time.Minute)}), true, nil)
+	f.dash.SetQuota(NewQuota([]QuotaSource{{Provider: domain.UsageCodex, Source: codex}}, f.opts, f.clock, nil))
+	f.add(t, "p1", "alpha", domain.StatusWorking)
+	f.fire(t, 1)
+	if got := f.board(); len(got) != 2 || !strings.Contains(got[0], "ws · alpha</a>\n\n🔑 Codex 7d 3% ↻4 d 2 h\n\n<i>updated 12:00</i>") {
+		t.Fatalf("created = %q", got)
+	}
+	// Numbers unchanged after a refresh: no edit (an appeared agent has
+	// no duration that could move).
+	f.tg.Reset()
+	f.clock.Advance(quotaRefresh)
+	if err := f.dash.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.board(); len(got) != 0 {
+		t.Fatalf("unchanged quota edited: %q", got)
+	}
+	// A new percentage edits the message once the refresh is due.
+	codex.set(usageOf(domain.UsageCodex, f.clock.Now(), domain.UsageWindow{Label: "7d", UsedPercent: 5, ResetsAt: tb0.Add(4*24*time.Hour + 2*time.Hour + 30*time.Minute)}), true, nil)
+	f.clock.Advance(quotaRefresh)
+	if err := f.dash.Tick(f.ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.board(); len(got) != 1 || !strings.Contains(got[0], "🔑 Codex 7d 5%") {
+		t.Fatalf("quota change = %q", got)
+	}
+	// The option off drops the lines.
+	f.tg.Reset()
+	if err := f.opts.Set(f.ctx, domain.OptionSyncQuota, "false", 1); err != nil {
+		t.Fatal(err)
+	}
+	f.dash.Schedule("option")
+	f.fire(t, 1)
+	if got := f.board(); len(got) != 1 || strings.Contains(got[0], "🔑") {
+		t.Fatalf("option off = %q", got)
+	}
+}

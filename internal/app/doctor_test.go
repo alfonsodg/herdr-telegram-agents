@@ -306,3 +306,44 @@ func TestDoctorPinRightAndOperatorChat(t *testing.T) {
 		}
 	})
 }
+
+// usageStub answers a fixed quota reading.
+type usageStub struct {
+	u   domain.Usage
+	ok  bool
+	err error
+}
+
+func (s usageStub) Usage(context.Context) (domain.Usage, bool, error) { return s.u, s.ok, s.err }
+
+func TestDoctorQuotaChecks(t *testing.T) {
+	f := newDoctor(t)
+	now := f.clock.Now()
+	f.doc.ClaudeTap = "/p/bin/herdr-tg usage-tap --out /s/claude-usage.json"
+	f.doc.ClaudeUsage = usageStub{}
+	f.doc.CodexUsage = usageStub{u: domain.Usage{ObservedAt: now.Add(-time.Hour)}, ok: true}
+	checks := f.doc.Run(context.Background())
+	claude, codex := check(t, checks, "claude quota"), check(t, checks, "codex quota")
+	if claude.Level != domain.CheckOK || !strings.Contains(claude.Detail, "not set up (optional)") ||
+		!strings.Contains(claude.Detail, "`/p/bin/herdr-tg usage-tap --out /s/claude-usage.json | <your status line command>`") {
+		t.Errorf("claude = %+v", claude)
+	}
+	if codex.Level != domain.CheckOK || !strings.HasPrefix(codex.Detail, "from the session files, seen ") {
+		t.Errorf("codex = %+v", codex)
+	}
+
+	f.doc.ClaudeUsage = usageStub{u: domain.Usage{ObservedAt: now.Add(-2 * time.Minute)}, ok: true}
+	f.doc.CodexUsage = usageStub{err: errors.New("sessions directory could not be opened")}
+	checks = f.doc.Run(context.Background())
+	if c := check(t, checks, "claude quota"); c.Level != domain.CheckOK || !strings.HasPrefix(c.Detail, "from the status line, seen ") {
+		t.Errorf("fresh claude = %+v", c)
+	}
+	if c := check(t, checks, "codex quota"); c.Level != domain.CheckWarn {
+		t.Errorf("broken codex = %+v", c)
+	}
+
+	f.doc.ClaudeUsage = usageStub{u: domain.Usage{ObservedAt: now.Add(-48 * time.Hour)}, ok: true}
+	if c := check(t, f.doc.Run(context.Background()), "claude quota"); c.Level != domain.CheckOK || !strings.Contains(c.Detail, "if the tap was removed") {
+		t.Errorf("stale claude = %+v", c)
+	}
+}

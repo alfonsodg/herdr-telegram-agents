@@ -119,6 +119,8 @@ type inbound struct {
 	// since supplies when each agent entered its status for the /status
 	// durations (the dashboard's record); nil shows no durations.
 	since func() map[domain.Key]time.Time
+	// quota renders the usage lines under /status; nil shows none.
+	quota *Quota
 	panel *panel
 	// cfg is the config in force: the chat, the bot's username and the
 	// operator and observer lists; /observers updates it and saves it
@@ -637,7 +639,7 @@ func (i *inbound) HandleGeneral(ctx context.Context, cmd domain.GeneralCommand) 
 	}
 	switch parsed.Kind {
 	case domain.CmdStatus:
-		text := i.statusSummary()
+		text := i.statusSummary(ctx)
 		return i.absorb(i.send(ctx, domain.Outgoing{ThreadID: 0, Text: text, HTML: true, ReplyTo: cmd.MessageID}))
 	case domain.CmdHelp:
 		return i.reply(ctx, 0, cmd.MessageID, helpText)
@@ -959,6 +961,9 @@ func (i *inbound) SetPresence(p *Presence) { i.presence = p }
 // shows how long each agent has been in its status; nil shows none.
 func (i *inbound) SetSince(fn func() map[domain.Key]time.Time) { i.since = fn }
 
+// SetQuota wires the usage lines shown under /status.
+func (i *inbound) SetQuota(q *Quota) { i.quota = q }
+
 // PressPanel serves a button of the options panel (callback data with the
 // panel prefix); the bridge routes such presses here.
 func (i *inbound) PressPanel(ctx context.Context, ev domain.ButtonPressed) error {
@@ -967,8 +972,8 @@ func (i *inbound) PressPanel(ctx context.Context, ev domain.ButtonPressed) error
 
 // statusSummary lists the live agents sorted by label, each linked to its
 // topic and with its status duration when known, as HTML: the same text
-// as the dashboard without its footer.
-func (i *inbound) statusSummary() string {
+// as the dashboard without its footer, quota lines included.
+func (i *inbound) statusSummary(ctx context.Context) string {
 	v := statusView{
 		agents:   i.live(),
 		topics:   i.topics,
@@ -977,6 +982,7 @@ func (i *inbound) statusSummary() string {
 		presence: i.presenceHeader(),
 		chatID:   i.cfg.ChatID,
 		now:      i.clock.Now(),
+		quota:    i.quota.Lines(ctx),
 	}
 	if i.since != nil {
 		v.since = i.since()

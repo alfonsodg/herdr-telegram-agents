@@ -266,6 +266,10 @@ func NewDaemon(cfg domain.Config, herdr domain.HerdrGateway, tg domain.TelegramG
 		d.log.Info("dashboard set", slog.Bool("enabled", cur.DashboardEnabled()))
 		d.dashboard.Schedule("option")
 	})
+	opts.OnChange(domain.OptionSyncQuota, func(_ string, cur domain.Options) {
+		d.log.Info("quota lines set", slog.Bool("enabled", cur.QuotaEnabled()))
+		d.dashboard.Schedule("option")
+	})
 	opts.OnChange(domain.OptionPostsPager, func(_ string, cur domain.Options) {
 		d.log.Info("pager set", slog.Bool("enabled", cur.PagerEnabled()))
 		if cur.PagerEnabled() {
@@ -368,6 +372,13 @@ func (d *Daemon) probePager(ctx context.Context, reason string) error {
 // SetInbox wires the attachment inbox so the daily sweep also deletes old
 // inbox files (inbox.delete_after_days).
 func (d *Daemon) SetInbox(inbox domain.InboxStore) { d.inbox = inbox }
+
+// SetQuota wires the usage lines into the dashboard and /status. Call it
+// before Run.
+func (d *Daemon) SetQuota(q *Quota) {
+	d.dashboard.SetQuota(q)
+	d.bridge.SetStatusQuota(q)
+}
 
 // SweepNow asks the loop for a stale-topic sweep. It never blocks.
 func (d *Daemon) SweepNow() {

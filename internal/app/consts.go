@@ -112,6 +112,11 @@ const (
 	// stays one Telegram message (4096 chars) whatever the agent count;
 	// the rest is summed up as "+N more".
 	dashboardMaxAgents = 40
+	// quotaRefresh is how often the quota lines re-read their sources;
+	// quotaStale is the age after which a line says when its numbers are
+	// from.
+	quotaRefresh = 60 * time.Second
+	quotaStale   = 30 * time.Minute
 	// pagerLines is how many trailing screen lines the pager message in the
 	// bot's private chat carries when the question is not a numbered
 	// dialog; a dialog lists its options instead.

@@ -14,7 +14,8 @@ import (
 // dashboard, so the two never disagree: the sync-off line, the presence
 // header, "N agents", then one line per live agent with its status icon,
 // its label linked to the topic and, when known, how long it has been in
-// that status. The dashboard adds a footer; /status has none.
+// that status, then the quota lines when there are any. The dashboard adds
+// a footer; /status has none.
 type statusView struct {
 	agents  []domain.Agent
 	topics  *topicView
@@ -26,8 +27,11 @@ type statusView struct {
 	chatID   int64
 	// since holds when each agent entered its current status; agents
 	// missing from it get no duration.
-	since  map[domain.Key]time.Time
-	now    time.Time
+	since map[domain.Key]time.Time
+	now   time.Time
+	// quota is the rendered quota lines (Quota.Lines), shown after the
+	// agents; part of the body, so a quota change edits the dashboard.
+	quota  string
 	footer string
 	// maxAgents caps the agent lines; 0 lists every agent. The dashboard
 	// sets it so its message never outgrows one Telegram message.
@@ -46,6 +50,15 @@ func (v statusView) render() string {
 // body renders everything but the footer; the dashboard hashes it to skip
 // edits that would only move the footer's clock.
 func (v statusView) body() string {
+	agents := v.agentLines()
+	if v.quota == "" {
+		return agents
+	}
+	return agents + "\n\n" + v.quota
+}
+
+// agentLines renders the headers and the agent list.
+func (v statusView) agentLines() string {
 	live := make([]domain.Agent, 0, len(v.agents))
 	for _, a := range v.agents {
 		if a.Status.Live() {

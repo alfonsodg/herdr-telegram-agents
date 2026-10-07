@@ -55,6 +55,9 @@ func (o *Options) SyncEnabled() bool { return o.Get().SyncEnabled() }
 // kept.
 func (o *Options) DashboardEnabled() bool { return o.Get().DashboardEnabled() }
 
+// QuotaEnabled reports whether the dashboard and /status show the quota lines.
+func (o *Options) QuotaEnabled() bool { return o.Get().QuotaEnabled() }
+
 // PagerEnabled reports whether questions ring from the bot's private chat.
 func (o *Options) PagerEnabled() bool { return o.Get().PagerEnabled() }
 

@@ -229,14 +229,17 @@ option of the Posts group:
   subagent traffic. The text is posted as a code block, so Markdown shows as
   the agent typed it. For OpenCode, which keeps its sessions in a database
   rather than a file per session, the daemon asks Herdr for the pane's
-  `agent_session` at read time and runs `opencode session export <session id>`
-  on OpenCode 2.x, falling back to `opencode export <session id>` on 1.x (the
-  `opencode` binary on `PATH`, one shared 10 s timeout, 16 MiB stdout cap per
-  attempt): the reply is
+  `agent_session` at read time. On OpenCode 2.x the daemon reads the rows
+  since the last user message from opencode's own database
+  (`~/.local/share/opencode/opencode.db`, through the `sqlite3` binary on its
+  `PATH`, read-only, one indexed query bounded at 5 s): the reply is
   every text part the agent wrote after your last prompt, joined in order,
-  skipping reasoning, tool calls and patches. The export is read through a
-  private temporary file, because the CLI silently truncates piped stdout at
-  64 KiB multiples while still exiting zero. A read whose newest record is
+  skipping reasoning, tool calls and patches. When the database or `sqlite3`
+  is unavailable, it falls back to `opencode session export <session id>`
+  (`opencode export <session id>` on 1.x) with the `opencode` binary on
+  `PATH`, one shared 10 s timeout and a 16 MiB stdout cap per attempt, read
+  through a private temporary file because the CLI silently truncates piped
+  stdout at 64 KiB multiples while still exiting zero. A read whose newest record is
   tool work means the turn is not over: the done post posts nothing and is
   retried after three seconds, so neither a fragment nor a screen tail
   appears and the settled answer arrives even when no further status change

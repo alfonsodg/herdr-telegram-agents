@@ -290,6 +290,54 @@ func TestGitRunnerIgnoresSubmoduleFilters(t *testing.T) {
 	}
 }
 
+// TestGitRunnerDoesNotEnterSubmoduleDiffs: a repository whose own config
+// sets diff.submodule=diff would make git diff run a child git diff inside
+// the submodule, which reads the submodule's config (diff.external) and
+// gets none of the outer run's guards.
+func TestGitRunnerDoesNotEnterSubmoduleDiffs(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell scripts")
+	}
+	inner := gitRepo(t)
+	dir := gitRepo(t)
+	marker := filepath.Join(t.TempDir(), "ran")
+	git := func(dir string, args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "protocol.file.allow=always"}, args...)...)
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git(dir, "submodule", "add", "-q", inner, "sub")
+	git(dir, "commit", "-q", "-m", "submodule")
+	sub := filepath.Join(dir, "sub")
+	if err := os.WriteFile(filepath.Join(sub, "a.txt"), []byte("moved\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git(sub, "commit", "-q", "-am", "moved")
+	git(dir, "config", "diff.submodule", "diff")
+	script := filepath.Join(t.TempDir(), "ext.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\necho ext >> "+marker+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git(sub, "config", "diff.external", script)
+	r := NewGitRunner(nil)
+	ctx := context.Background()
+	for _, args := range [][]string{{"diff", "HEAD"}, {"diff"}} {
+		out, err := r.Run(ctx, dir, args)
+		if data, rerr := os.ReadFile(marker); rerr == nil {
+			t.Fatalf("%v ran the submodule's diff.external:\n%s", args, data)
+		}
+		if err != nil {
+			t.Fatalf("%v: %v", args, err)
+		}
+		if !strings.Contains(out.Output, "Subproject commit") && !strings.Contains(out.Output, "Submodule sub") {
+			t.Fatalf("%v lost the submodule change:\n%s", args, out.Output)
+		}
+	}
+}
+
 // TestGitFilterNames: drivers from the user's own scopes (git-lfs) stay on,
 // repository scopes are neutralised, and a name -c cannot carry refuses.
 func TestGitFilterNames(t *testing.T) {

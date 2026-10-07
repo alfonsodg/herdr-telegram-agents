@@ -25,7 +25,7 @@ const helpText = `Commands
 /stop: send esc to the agent (soft cancel of the running turn or dialog)
 /interrupt: send ctrl+c to the agent (hard interrupt)
 /close: close the agent's pane after a Yes/No confirmation
-/clear, /compact [instructions], /usage, /model [name]: typed into the agent as its own command while it is idle; the screen after it is posted as a reply. On Claude Code /usage and a bare /model are closed with esc for you; other agents keep their picker open (choose with /keys, close with /stop) and your next plain message is held back once
+/clear, /compact [instructions], /usage, /model [name], /models: typed into the agent as its own command while it is idle (/models is OpenCode's model picker); the screen after it is posted as a reply. On Claude Code /usage and a bare /model are closed with esc for you; other agents keep their picker open (choose with /keys, close with /stop) and your next plain message is held back once
 /status: this agent's status; in General, every agent with a link to its topic
 /away [2h]: treat you as away until /here or for the given time, so Telegram gets everything (General only)
 /here: back to automatic presence (General only)

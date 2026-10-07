@@ -520,6 +520,28 @@ func TestInboundForwardModelOnCodexKeepsPicker(t *testing.T) {
 	}
 }
 
+// TestInboundForwardModelsOnOpenCodeKeepsPicker: OpenCode's model picker is
+// its own /models; it is forwarded and kept open like the /model pickers.
+func TestInboundForwardModelsOnOpenCodeKeepsPicker(t *testing.T) {
+	f := newBridgeFixture(t)
+	f.withKind(f.add(t, "p1", "t1", "reviewer", domain.StatusIdle), "opencode")
+	f.herdr.SetScreen("p1", codexModelScreen)
+
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 31, "/models")); err != nil {
+		t.Fatal(err)
+	}
+	f.fireCommand(t, 1)
+	if p := f.herdr.Prompts(); len(p) != 1 || p[0] != "p1: /models" {
+		t.Fatalf("Prompts = %v", p)
+	}
+	if k := f.herdr.Keys(); len(k) != 0 {
+		t.Fatalf("picker dismissed: %+v", k)
+	}
+	if sent := f.tg.Sent(); len(sent) != 1 || sent[0].Footer != pickerHint || sent[0].ReplyTo != 31 {
+		t.Fatalf("Sent = %+v", sent)
+	}
+}
+
 // keptPicker leaves a Codex /model picker open on p1 and returns the agent.
 func keptPicker(t *testing.T, f *bridgeFixture) domain.Agent {
 	t.Helper()

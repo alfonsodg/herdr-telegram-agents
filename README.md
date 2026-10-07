@@ -63,7 +63,9 @@ an exact session reference, `/screen` falls back to the visible terminal.
 In General, `/status` shows all agents, `/new` starts one, and `/options`
 opens the settings panel. The panel controls syncing, notification behavior,
 icons, redaction, and cleanup. The pinned dashboard shows the same agent
-statuses. Operators can add read-only observers with `/observers`.
+statuses, plus the Codex usage windows and, once the status line tap from
+`doctor` is installed, Claude's 5-hour and weekly quota. Operators can add
+read-only observers with `/observers`.
 
 See [Commands](docs/commands.md) for every command and attachment rule, and
 [Behavior](docs/behaviour.md) for sync, settings, access, and daemon details.

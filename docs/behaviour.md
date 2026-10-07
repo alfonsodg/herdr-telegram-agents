@@ -90,6 +90,9 @@ splits a long list across messages:
 ⚡ V3Jobs · claude · 12 min
 ❓ herdr_tg · claude · 3 min
 
+🔑 Claude 5h 18% ↻2 h · 7d 83% ↻1 d 4 h
+🔑 Codex 7d 3% ↻4 d 2 h
+
 updated 21:35
 ```
 
@@ -116,6 +119,54 @@ updated 21:35
   one stale pinned message behind; unpin and delete it by hand.
 - `Dashboard in General` in `/options` → Sync (default on) switches it;
   off unpins and deletes the message.
+- Under the agents come the quota lines, one per provider with data: each
+  usage window with the share spent and the time until it starts over. See
+  [Quota lines](#quota-lines).
+
+### Quota lines
+
+The dashboard and `/status` end with the usage windows of Claude and Codex
+when the daemon has numbers for them. `Quota in the dashboard` in
+`/options` → Sync (default on) switches them; the lines change only
+messages that are edited in place, so they never ring.
+
+- **Codex** needs no setup. Every `token_count` event in a Codex rollout
+  (`~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`) carries the account's
+  rate limits; the daemon reads the newest one among the eight most
+  recently written rollouts of the last week. Rate limits belong to the
+  account, so any session will do. Windows are named by length: `5h`,
+  `7d`. An API-key login has no rate limits and shows no line.
+- **Claude** comes from Claude Code's status line. Claude Code hands its
+  status line command a JSON object with `rate_limits.five_hour` and
+  `rate_limits.seven_day` (subscription logins, after the first answer of a
+  session); the plugin's `usage-tap` subcommand stores those two windows
+  and passes its input on unchanged, so it goes in front of your own status
+  line command in `~/.claude/settings.json`:
+
+  ```json
+  "statusLine": {
+    "type": "command",
+    "command": "<plugin dir>/bin/herdr-tg usage-tap --out <state dir>/claude-usage.json | ~/.claude/statusline.sh"
+  }
+  ```
+
+  The doctor action prints this line with both paths filled in (`claude
+  quota: not set up (optional) …`). Without a status line of your own,
+  use the tap alone; it prints its input, so Claude Code shows the raw
+  JSON. The plugin never edits `settings.json`. The tap stores only the two
+  windows and the time it saw them, never the working directory, session,
+  model or cost from the same input; a write failure prints one
+  `usage-tap: …` line on stderr and the status line keeps working. On
+  Windows the command runs through the shell Claude Code uses there; this
+  has not been checked yet.
+- The sources are read at most once a minute. A window whose reset time has
+  passed is dropped, since its share no longer holds; a provider with no
+  window left shows no line. The time left is coarse so the dashboard is
+  not edited every minute for it: `N min` under an hour, `N h` under a day,
+  `N d M h` beyond. Numbers older than 30 minutes end with `· as of HH:MM`.
+- A source that fails keeps its last numbers; the log has one `quota source
+  failed` warning per distinct error and `quota source ready` the first
+  time a provider has data.
 
 ## Capturing working screens
 
@@ -455,6 +506,7 @@ The options today:
 |--------|-------|--------------|
 | `Herdr → Telegram sync` | Sync | Default on. Off: the daemon creates, edits and closes no topic and posts no screen until it is on again. Messages, keys, `/screen`, `/status` and presses on existing question buttons keep working, the screen capture keeps running, daemon notices keep posting. Back on: a full resync, like the `resync` action. A daemon that starts with sync off says so in its started notice, in the `/status` header (`🔇 …`), in the `status` action line (`sync=off`) and in the log. |
 | `Dashboard in General` | Sync | Default on. One pinned message in General, edited in place and never ringing: every live agent (up to 40, then `… +N more`) with its status, how long it has been in it and a link to its topic, `updated HH:MM` at the bottom. Off unpins and deletes it. See [The dashboard](#the-dashboard). |
+| `Quota in the dashboard` | Sync | Default on. The Claude and Codex usage windows under the dashboard and `/status` (`🔑 Codex 7d 3% ↻4 d 2 h`). Codex is read from its session files; Claude needs the status line tap the doctor action shows. No data, no line. Off drops the lines at the next refresh. See [Quota lines](#quota-lines). |
 | `Quiet while at the desk` | Quiet | Default off: every topic edit and screen post goes out at once, sounds included, so a fresh install shows the plugin at work. On: while you are at the desk, topic edits wait and screen posts are silent; everything catches up when you leave. On Linux it needs GNOME, or an X11 session with `xprintidle`; see the Presence bullet. Off means no presence check at all; `/away` and `/here` then answer that quiet mode is off. See [Quiet while at the desk](#quiet-while-at-the-desk). |
 | `Away after` | Quiet | Default 3 min. Minutes without keyboard or mouse input on this machine before you count as away. A value outside the picker's list (say `45`) can be typed into `options.json` by hand. |
 | `Hold topic edits` | Quiet | Default on. While at the desk no topic is created, renamed, closed, reopened or given a new icon; each of those is a Telegram service message that rings the phone. Off keeps topic edits live while at the desk. |
@@ -479,7 +531,7 @@ The options today:
 
 Values are saved in `options.json` next to `config.json` (mode 0600) as
 `{"version": 1, "values": {"sync.enabled": true, "sync.dashboard": true,
-"quiet.enabled": true, "quiet.idle_minutes": "3", "quiet.posts": "silent",
+"sync.quota": true, "quiet.enabled": true, "quiet.idle_minutes": "3", "quiet.posts": "silent",
 "posts.done": "formatted", "posts.meta": true, "posts.fold": "20",
 "posts.chrome": true, "posts.reactions": false, "posts.pager": true,
 "posts.blocked_delay": "0", "inbox.enabled": true, "inbox.max_mb": "20",
@@ -814,6 +866,7 @@ not start: …`.
 | `options.json` | config dir, mode 0600 | the `/options` choices |
 | `inbox/` | state dir, mode 0700, files 0600 | attachments sent to topics, swept daily after `Delete files after` |
 | `daemon.pid` | state dir | pid of the running daemon |
+| `claude-usage.json` | state dir, mode 0600 | Claude's two usage windows and when the status line tap saw them, written by `usage-tap` from Claude Code's status line; see [Quota lines](#quota-lines) |
 | `update.json` | state dir, mode 0600 | current or last update job, phases, source, versions, rollback data and notification state |
 | `update.lock/` | state dir | exclusive worker ownership; a dead owner can be recovered |
 | `update-worker-<job-id>` and `update-worker.err.log` | state dir | detached worker copy and its stderr; `.exe` on Windows |

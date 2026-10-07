@@ -129,6 +129,7 @@ var botCommands = []models.BotCommand{
 	{Command: "compact", Description: "Claude Code /compact [instructions]: compact the context"},
 	{Command: "usage", Description: "Claude Code /usage: show the usage panel, closed for you afterwards"},
 	{Command: "model", Description: "Claude Code /model [name]: show the picker or set the model"},
+	{Command: "models", Description: "OpenCode /models: model picker, drive it with /keys"},
 	{Command: "close", Description: "Close the agent's pane (asks Yes/No)"},
 	{Command: "new", Description: "Start an agent: /new <workspace> [kind] (General)"},
 	{Command: "observers", Description: "List or change observers: /observers [add|remove <id>] (General)"},

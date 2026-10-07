@@ -23,12 +23,6 @@ const kindPi = "pi"
 // piHeaderMax bounds the read of a session file's first line, the header.
 const piHeaderMax = 64 << 10
 
-// piMarkMessage gates the full decode of a line: only message entries
-// decide the answer. Pi writes JSON.stringify output, without spaces.
-// Every other line still gets the small head decode, because the active
-// branch is followed through every entry's id and parentId.
-var piMarkMessage = []byte(`"type":"message"`)
-
 // errPiNoRecord means the session holds no message on the active branch.
 var errPiNoRecord = fmt.Errorf("%w: the pi session has no answer", domain.ErrNoReply)
 
@@ -387,7 +381,10 @@ func (w *piWalk) visit(line []byte) error {
 		w.atHeader = true
 		return errStop
 	}
-	if !w.onBranch(h) || h.Type != "message" || !bytes.Contains(line, piMarkMessage) {
+	// Every line gets the small head decode, because the active branch is
+	// followed through every entry's id and parentId; only message entries
+	// on it are decoded in full.
+	if !w.onBranch(h) || h.Type != "message" {
 		return nil
 	}
 	var e piEntry

@@ -167,11 +167,16 @@ func (p *PrivateControl) Handle(ctx context.Context, e domain.PrivateMessage) er
 	case domain.CmdInterrupt:
 		return p.keys(ctx, o, []string{domain.KeyInterrupt})
 	case domain.CmdForward:
-		if a.Kind != domain.ClaudeKind {
+		if a.Kind != domain.ClaudeKind || !cmd.Forward.Fits(a.Kind) {
 			return p.send(ctx, o, "This command is supported only for Claude Code.")
 		}
-		if cmd.Text == "/clear" && a.Status != domain.StatusIdle && a.Status != domain.StatusDone {
-			return p.send(ctx, o, "Wait until the agent is idle before /clear.")
+		// As on the owner's path: typed into a running turn or an open
+		// dialog, its Enter would confirm the highlighted option and the
+		// follow-up esc could interrupt the tool that just started.
+		if hint, refused := forwardRefusal(a.Status); refused {
+			p.log().Info("[FIX] private command refused", slog.String("key", o.Key.String()), slog.String("grant", o.GrantID),
+				slog.String("word", forwardWord(cmd.Text)), slog.String("status", string(a.Status)))
+			return p.send(ctx, o, "Not sent: "+hint+".")
 		}
 		err := p.effect(ctx, o, domain.ShareForward, func(ctx context.Context) error { return p.Herdr.Prompt(ctx, o.Key.PaneID, cmd.Text) })
 		if err == nil && cmd.Forward.Post != domain.ForwardPostNone {

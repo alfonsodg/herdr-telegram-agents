@@ -247,7 +247,7 @@ requests in a separate operating-system account.
 | `/agents`, `/status`, `/help`, `/screen [N]` | Read or Control |
 | `/screen all` | History captured after this grant's activation |
 | Prompts, supported files, dialog buttons, `/keys`, `/stop`, `/interrupt` | Control |
-| `/clear`, `/compact`, `/usage`, `/model` | Control; Claude Code only, so no picker is ever left open on a shared agent |
+| `/clear`, `/compact`, `/usage`, `/model` | Control; Claude Code only, so no picker is ever left open on a shared agent; refused while the agent works or waits at a dialog, as in the owner's topics |
 | `/git status`, `/git diff`, `/git log` | Control, or Read with repository-read enabled |
 | `/close` | Control plus close-agent permission; separate confirmation |
 | `/focus` | Control plus local-focus permission |

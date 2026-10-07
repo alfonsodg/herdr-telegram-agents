@@ -5,21 +5,32 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/permgps/herdr-telegram-agents/internal/domain"
 )
 
 // idleTimeout bounds one sample of the idle source (the ioreg call on
-// macOS); the presence tracker asks every ten seconds.
+// macOS, the whole helper chain on Linux); the presence tracker asks every
+// ten seconds.
 const idleTimeout = 3 * time.Second
 
 // IdleSource reports how long the keyboard and mouse of this machine have
 // been untouched. macOS reads HIDIdleTime through ioreg, Windows calls
-// GetLastInputInfo; every other platform answers ErrIdleUnsupported.
+// GetLastInputInfo, Linux asks GNOME's Mutter over gdbus and then
+// xprintidle; other platforms, and a Linux machine with neither, answer
+// ErrIdleUnsupported.
 type IdleSource struct {
 	log     *slog.Logger
 	timeout time.Duration
+	// sample is idleFor; tests replace it.
+	sample func(context.Context) (time.Duration, string, error)
+
+	mu sync.Mutex
+	// source is the name of the last source that answered, so a change is
+	// logged once.
+	source string
 }
 
 var _ domain.IdleSource = (*IdleSource)(nil)
@@ -29,22 +40,30 @@ func NewIdleSource(log *slog.Logger) *IdleSource {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &IdleSource{log: log, timeout: idleTimeout}
+	return &IdleSource{log: log, timeout: idleTimeout, sample: idleFor}
 }
 
 // Idle samples the platform source once. ErrIdleUnsupported passes through
 // so the caller can recognise it with errors.Is; other failures are wrapped
-// and logged at debug (the tracker rate-limits the warning).
+// and logged at debug (the tracker rate-limits the warning). The first
+// answer, and every answer from a different source, is logged at info.
 func (s *IdleSource) Idle(ctx context.Context) (time.Duration, error) {
 	ctx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
-	d, err := idleFor(ctx)
+	d, source, err := s.sample(ctx)
 	if err != nil {
 		if errors.Is(err, domain.ErrIdleUnsupported) {
 			return 0, err
 		}
 		s.log.Debug("input idle sample failed", slog.String("err", err.Error()))
 		return 0, fmt.Errorf("input idle: %w", err)
+	}
+	s.mu.Lock()
+	changed := source != s.source
+	s.source = source
+	s.mu.Unlock()
+	if changed {
+		s.log.Info("input idle source", slog.String("source", source))
 	}
 	return d, nil
 }

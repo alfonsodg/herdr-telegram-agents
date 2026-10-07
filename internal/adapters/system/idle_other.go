@@ -1,4 +1,4 @@
-//go:build !darwin && !windows
+//go:build !darwin && !windows && !linux
 
 package system
 
@@ -10,6 +10,6 @@ import (
 )
 
 // idleFor has no source on this platform; presence stays "away".
-func idleFor(context.Context) (time.Duration, error) {
-	return 0, domain.ErrIdleUnsupported
+func idleFor(context.Context) (time.Duration, string, error) {
+	return 0, "", domain.ErrIdleUnsupported
 }

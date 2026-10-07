@@ -1464,12 +1464,15 @@ func (o *outbound) replyScreen(ctx context.Context, key domain.Key) (string, boo
 // freshReply reports whether r belongs to the current turn. No known turn
 // start or no known write time leaves nothing to compare, so it counts as
 // fresh; a reply written before the turn started belongs to an earlier
-// turn and is stale.
+// turn and is stale. The recorded start is when the daemon saw the working
+// status, a moment after the agent began, and transcript timestamps can be
+// second-precision, so a fast turn's answer can predate it by a second or
+// two and still be this turn's; anything older stays stale.
 func freshReply(hasTurn bool, turnStarted time.Time, r domain.Reply) bool {
 	if !hasTurn || turnStarted.IsZero() || r.Written.IsZero() {
 		return true
 	}
-	return !r.Written.Before(turnStarted)
+	return !r.Written.Before(turnStarted.Add(-turnStartSlack))
 }
 
 // ScreenAll posts what the agent printed since the last human message: the

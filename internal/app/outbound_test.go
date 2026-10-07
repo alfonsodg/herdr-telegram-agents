@@ -2251,3 +2251,34 @@ func TestOutboundNilOptionsDoneIsFormatted(t *testing.T) {
 		t.Fatalf("Sent = %+v", sent)
 	}
 }
+
+// TestFreshReplySlack: the recorded turn start is when the daemon saw the
+// working status, a moment after the agent began, so a reply written just
+// before it is still this turn's; anything beyond the slack stays stale
+// and the post falls back to the screen.
+func TestFreshReplySlack(t *testing.T) {
+	start := time.Unix(1000, 0)
+	for _, tc := range []struct {
+		name    string
+		written time.Time
+		want    bool
+	}{
+		{"after the start", start.Add(time.Second), true},
+		{"at the start", start, true},
+		{"inside the slack", start.Add(-2 * time.Second), true},
+		{"at the slack edge", start.Add(-turnStartSlack), true},
+		{"beyond the slack", start.Add(-turnStartSlack - time.Second), false},
+		{"an earlier turn", start.Add(-time.Minute), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := freshReply(true, start, domain.Reply{Written: tc.written}); got != tc.want {
+				t.Fatalf("freshReply(%v) = %v, want %v", tc.written, got, tc.want)
+			}
+		})
+	}
+	if !freshReply(false, start, domain.Reply{Written: start.Add(-time.Hour)}) ||
+		!freshReply(true, time.Time{}, domain.Reply{Written: start}) ||
+		!freshReply(true, start, domain.Reply{}) {
+		t.Fatal("unknown comparisons must count as fresh")
+	}
+}

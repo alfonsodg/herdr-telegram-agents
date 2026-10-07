@@ -26,6 +26,13 @@ const (
 	// replyMaxParts caps a done post taken from the transcript: a reply
 	// longer than this many messages is cut with a trailer.
 	replyMaxParts = 5
+	// replyPendingRetries and replyPendingDelay bound the wait for a done
+	// post whose reply source says the turn is still running (OpenCode
+	// reports done at every step of a turn): the post is fired again up to
+	// this many times this far apart, then the screen is posted. The real
+	// turn end usually arrives first as a new done event.
+	replyPendingRetries = 3
+	replyPendingDelay   = 5 * time.Second
 	// defaultFoldLines is the fold threshold used without an options
 	// registry (tests); it mirrors the posts.fold default.
 	defaultFoldLines = 20

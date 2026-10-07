@@ -97,6 +97,21 @@ type outbound struct {
 	refresh map[domain.Key]int
 	// typing holds the open ✏️ wait per agent.
 	typing map[domain.Key]typingWait
+	// pendingReplies holds, per agent, a done post waiting for its reply
+	// source to finish the turn (domain.ErrReplyPending); the debouncer
+	// carries the retry timer.
+	pendingReplies map[domain.Key]pendingReply
+}
+
+// pendingReply is a done post fired again after replyPendingDelay. It keeps
+// the turn the first fire ended, so the retry checks freshness against the
+// same start and does not pay the reaction twice; idle marks a turn that
+// ended by settling into idle rather than done.
+type pendingReply struct {
+	attempts int
+	t        turn
+	hasTurn  bool
+	idle     bool
 }
 
 // pendingCapture is the first screen of a question kept while the blocked
@@ -232,6 +247,8 @@ func newOutbound(herdr domain.HerdrGateway, tg domain.TelegramGateway, chatID in
 		captures:     map[domain.Key]pendingCapture{},
 		refresh:      map[domain.Key]int{},
 		typing:       map[domain.Key]typingWait{},
+
+		pendingReplies: map[domain.Key]pendingReply{},
 	}
 }
 
@@ -413,6 +430,7 @@ func (o *outbound) Observe(ev AgentEvent) {
 		}
 	}
 	o.observeTurn(ev)
+	o.observePendingReply(ev)
 	if ev.Agent.Status != domain.StatusBlocked || ev.Kind == AgentGone {
 		delete(o.announced, key)
 	}
@@ -442,8 +460,31 @@ func (o *outbound) Observe(ev AgentEvent) {
 			o.log.Debug("refresh pending, timer kept", slog.String("key", key.String()), slog.String("status", string(ev.Agent.Status)))
 			return
 		}
+		// A done post waiting for its reply: an agent that settled into
+		// idle keeps reporting idle, and that must not cancel the retry.
+		if _, pending := o.pendingReplies[key]; pending {
+			o.log.Debug("reply retry pending, timer kept", slog.String("key", key.String()), slog.String("status", string(ev.Agent.Status)))
+			return
+		}
 		o.deb.Cancel(key)
 	}
+}
+
+// observePendingReply drops a waiting done post once the agent moved on:
+// a new turn (working), a question (blocked) or an exit. Its answer is
+// then either superseded or unreachable.
+func (o *outbound) observePendingReply(ev AgentEvent) {
+	key := ev.Agent.Key
+	p, ok := o.pendingReplies[key]
+	if !ok {
+		return
+	}
+	if ev.Kind != AgentGone && ev.Agent.Status != domain.StatusWorking && ev.Agent.Status != domain.StatusBlocked {
+		return
+	}
+	delete(o.pendingReplies, key)
+	o.log.Debug("reply retry dropped", slog.String("key", key.String()), slog.String("status", string(ev.Agent.Status)),
+		slog.Bool("gone", ev.Kind == AgentGone), slog.Int("attempts", p.attempts))
 }
 
 // reassociateState carries in-memory screen, dialog and turn state when the
@@ -463,6 +504,7 @@ func (o *outbound) reassociateState(from domain.Key, next domain.Agent) {
 	moveAgentState(o.captures, from, next.Key)
 	moveAgentState(o.refresh, from, next.Key)
 	moveAgentState(o.typing, from, next.Key)
+	moveAgentState(o.pendingReplies, from, next.Key)
 	delete(o.threads, from)
 	if hasCapture && !timerMoved {
 		o.deb.ScheduleAfter(next.Key, 0)
@@ -481,6 +523,7 @@ func (o *outbound) Forget(ctx context.Context, key domain.Key) error {
 	delete(o.turns, key)
 	delete(o.captures, key)
 	delete(o.refresh, key)
+	delete(o.pendingReplies, key)
 	o.endTyping(key, "exited")
 	return o.retire(ctx, key, "exited")
 }
@@ -498,19 +541,26 @@ func (o *outbound) Fire(ctx context.Context, key domain.Key) error {
 // fire is Fire with a force flag for the catch-up: force bypasses the
 // duplicate check and the quiet rules and always rings.
 func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompletion bool) error {
+	// A waiting done post is taken out here and put back only when this
+	// fire schedules another retry, so every other exit drops it.
+	retry, retrying := o.pendingReplies[key]
+	delete(o.pendingReplies, key)
 	agent, ok := o.agents(key)
 	if !ok {
 		return o.skip(key, "exited")
 	}
 	status := agent.Status
-	if idleCompletion && status == domain.StatusIdle {
+	if (idleCompletion || retrying && retry.idle) && status == domain.StatusIdle {
 		status = domain.StatusDone
 	}
 	// A done status ends the turn here, before any reason to skip the
 	// post: the ✅ is owed even when the post is muted, held or short.
+	// A retry already ended its turn and carries it along.
 	var t turn
 	var hasTurn bool
-	if status == domain.StatusDone {
+	if status == domain.StatusDone && retrying {
+		t, hasTurn = retry.t, retry.hasTurn
+	} else if status == domain.StatusDone {
 		if t, hasTurn = o.turns[key]; hasTurn {
 			delete(o.turns, key)
 			o.turnDeb.Cancel(key)
@@ -625,7 +675,22 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompleti
 		if agent.Kind == "opencode" && err != nil {
 			logErr = fmt.Errorf("reply unavailable")
 		}
+		// The reply source says the turn is still running: posting now
+		// would send a fragment. Fire again later, a bounded number of
+		// times; the screen mode only loses its footer, as on any failure.
+		pending := errors.Is(err, domain.ErrReplyPending) && mode != domain.DoneScreen
+		if pending && retry.attempts < replyPendingRetries {
+			o.pendingReplies[key] = pendingReply{attempts: retry.attempts + 1, t: t, hasTurn: hasTurn, idle: idleCompletion || retry.idle}
+			o.deb.ScheduleAfter(key, replyPendingDelay)
+			o.log.Debug("reply pending, retry scheduled", slog.String("key", key.String()), slog.Int("attempt", retry.attempts+1),
+				slog.Int("max", replyPendingRetries), slog.Int64("delay_ms", replyPendingDelay.Milliseconds()), slog.String("mode", string(mode)))
+			return nil
+		}
 		switch {
+		case pending:
+			o.log.Info("reply still pending, screen posted", slog.String("key", key.String()), slog.String("mode", string(mode)),
+				slog.Int("attempts", retry.attempts))
+			mode = domain.DoneScreen
 		case err != nil && mode != domain.DoneScreen:
 			o.log.Info("reply source unavailable", slog.String("key", key.String()), slog.String("mode", string(mode)), slog.Any("err", logErr))
 			mode = domain.DoneScreen
@@ -706,7 +771,7 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompleti
 			slog.String("mode", string(mode)), slog.Int("lines", strings.Count(text, "\n")+1), slog.Int("bytes", len(text)),
 			slog.String("source", reply.Source), slog.Int64("age_ms", reply.Age.Milliseconds()),
 			slog.Int("message_id", id), slog.Bool("notify", notify), slog.Bool("forced", force),
-			slog.Bool("footer", footer != ""), slog.Int("fold", out.Fold))
+			slog.Bool("footer", footer != ""), slog.Int("fold", out.Fold), slog.Int("retries", retry.attempts))
 		return nil
 	}
 	o.log.Info("screen posted", slog.String("key", key.String()), slog.Int("thread_id", entry.ThreadID),
@@ -1373,7 +1438,11 @@ func (o *outbound) replyScreen(ctx context.Context, key domain.Key) (string, boo
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return "", false, err
 		}
-		o.log.Debug("screen reply unavailable", slog.String("key", key.String()), slog.String("category", "unavailable"))
+		category := "unavailable"
+		if errors.Is(err, domain.ErrReplyPending) {
+			category = "pending"
+		}
+		o.log.Debug("screen reply unavailable", slog.String("key", key.String()), slog.String("category", category))
 		return "", false, nil
 	}
 	t, hasTurn := o.turns[key]

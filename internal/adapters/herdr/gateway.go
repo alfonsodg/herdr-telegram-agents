@@ -378,6 +378,9 @@ func translateCallErr(method string, err error) error {
 	if apiErr.Code == codeNotIdle {
 		return fmt.Errorf("herdr %s: %w: %w", method, domain.ErrAgentBusy, apiErr)
 	}
+	if apiErr.Code == codeAgentBlocked {
+		return fmt.Errorf("herdr %s: %w: %w", method, domain.ErrAgentBlocked, apiErr)
+	}
 	if apiErr.Code == codeNotFound {
 		return fmt.Errorf("herdr %s: %w", method, domain.ErrAgentGone)
 	}

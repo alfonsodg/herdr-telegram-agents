@@ -187,22 +187,35 @@ func TestPresenceUnsupportedAndFailing(t *testing.T) {
 	f := newPresence(t, idle)
 	ctx := context.Background()
 	f.p.Poll(ctx)
-	f.p.Poll(ctx)
-	if f.p.Quiet() || f.p.State().Supported || idle.Calls() != 1 {
+	// No source: quiet starts at the desk (silent) until /away.
+	if !f.p.Quiet() || f.p.State().Supported || idle.Calls() != 1 {
 		t.Fatalf("unsupported source: quiet=%v state=%+v calls=%d", f.p.Quiet(), f.p.State(), idle.Calls())
 	}
-	if got := f.p.State().Word(); got != "off" {
+	if v, ok := f.change(); !ok || !v {
+		t.Fatalf("at-desk default change = %v, %v", v, ok)
+	}
+	if got := f.p.State().Word(); got != "on" {
 		t.Errorf("Word = %q", got)
 	}
+	f.p.Poll(ctx) // inside the retry window: not asked again
+	if idle.Calls() != 1 || !f.p.Quiet() {
+		t.Fatalf("retry window: calls=%d quiet=%v", idle.Calls(), f.p.Quiet())
+	}
+
+	// /away releases the default and it must not creep back by itself.
 	st := f.p.Away(0, 7)
 	if st.Quiet || !st.ManualAway || st.Word() != "off" {
 		t.Errorf("/away on unsupported platform = %+v", st)
 	}
-	if _, ok := f.change(); ok {
-		t.Error("unsupported source queued a change")
+	if v, ok := f.change(); !ok || v {
+		t.Fatalf("change after /away = %v, %v", v, ok)
+	}
+	f.p.Poll(ctx)
+	if f.p.Quiet() {
+		t.Error("away re-engaged the at-desk default")
 	}
 
-	// /here on a platform with no source turns quiet on by hand until /away.
+	// /here turns quiet on by hand until /away.
 	st = f.p.Here(7)
 	if !st.ManualHere || !st.Quiet || st.Word() != "on" {
 		t.Errorf("/here manual = %+v", st)
@@ -214,8 +227,8 @@ func TestPresenceUnsupportedAndFailing(t *testing.T) {
 		t.Errorf("/away did not clear the manual here = %+v", st)
 	}
 	f.change()
-	// Unsupported sources are retried, so one that appears later recovers;
-	// quiet is back on by hand meanwhile.
+	// Unsupported sources are retried; one that appears later recovers and
+	// the automatic verdict replaces the manual default.
 	f.p.Here(7)
 	f.change()
 	if idle.Calls() != 1 {

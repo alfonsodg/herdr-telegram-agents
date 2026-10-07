@@ -41,6 +41,11 @@ type Presence struct {
 	manualAway  bool
 	manualUntil time.Time
 	manualHere  bool
+	// manualHereAuto marks a manualHere the daemon applied by itself (no
+	// idle source: quiet starts at the desk). A working source clears it,
+	// and /away disables the default for the rest of the run (awayChosen).
+	manualHereAuto bool
+	awayChosen     bool
 	// quiet is the last effective flag handed out through Changes.
 	quiet bool
 
@@ -102,6 +107,7 @@ func (p *Presence) Poll(ctx context.Context) {
 	now := p.clock.Now()
 	if p.manualAway && !p.manualUntil.IsZero() && !now.Before(p.manualUntil) {
 		p.manualAway, p.manualUntil = false, time.Time{}
+		p.awayChosen = false
 		p.log.Info("away expired, presence automatic again")
 	}
 	p.sample(ctx)
@@ -124,7 +130,13 @@ func (p *Presence) sample(ctx context.Context) {
 	switch {
 	case errors.Is(err, domain.ErrIdleUnsupported):
 		if !p.unsupported {
-			p.log.Warn("presence: no input idle source on this platform; /here turns quiet on by hand until /away")
+			p.log.Warn("presence: no input idle source on this platform; quiet starts at the desk, /away releases it")
+		}
+		// With no source the daemon assumes the operator is at the desk:
+		// quiet starts on (Telegram silent) until /away says otherwise.
+		if !p.awayChosen && !p.manualAway && !p.manualHere {
+			p.manualHere, p.manualHereAuto = true, true
+			p.log.Info("presence: no idle source, starting at the desk until /away")
 		}
 		p.unsupported = true
 		p.atDesk, p.sampled = false, true
@@ -144,6 +156,10 @@ func (p *Presence) sample(ctx context.Context) {
 		p.unsupported = false
 		p.log.Info("presence source appeared")
 	}
+	if p.manualHereAuto {
+		// The at-desk default yields to the automatic verdict.
+		p.manualHere, p.manualHereAuto = false, false
+	}
 	threshold := p.opts.QuietIdle()
 	atDesk := d < threshold
 	if !p.sampled || atDesk != p.atDesk {
@@ -160,6 +176,8 @@ func (p *Presence) Away(d time.Duration, by int64) domain.PresenceState {
 	p.manualAway = true
 	p.manualUntil = time.Time{}
 	p.manualHere = false
+	p.manualHereAuto = false
+	p.awayChosen = true
 	if d > 0 {
 		p.manualUntil = p.clock.Now().Add(d)
 	}
@@ -177,6 +195,7 @@ func (p *Presence) Here(by int64) domain.PresenceState {
 	p.manualAway, p.manualUntil = false, time.Time{}
 	if p.unsupported {
 		p.manualHere = true
+		p.manualHereAuto = false
 	}
 	p.log.Info("presence here", slog.Int64("by", by), slog.Bool("manual", p.manualHere), slog.Bool("at_desk", p.atDesk))
 	p.recompute()

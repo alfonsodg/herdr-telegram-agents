@@ -79,6 +79,10 @@ var (
 	// screen, and it tells the caller this fallback is expected: an agent
 	// nobody can read, not a reader that broke.
 	ErrUnsupportedAgent = fmt.Errorf("agent kind not readable: %w", ErrNoReply)
+	// ErrStaleTranscript means the read found a reply written before the
+	// turn started (another pane in the same directory, a turn with no new
+	// transcript): an expected fallback, not a broken reader.
+	ErrStaleTranscript = errors.New("stale transcript")
 	// ErrAgentBlocked means Herdr refused a prompt because the agent waits
 	// at an approval or question dialog; the text must be typed into the
 	// dialog instead (pane.send_text).

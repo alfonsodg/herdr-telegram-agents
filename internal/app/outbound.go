@@ -508,6 +508,7 @@ func (o *outbound) reassociateState(from domain.Key, next domain.Agent) {
 	moveAgentState(o.refresh, from, next.Key)
 	moveAgentState(o.typing, from, next.Key)
 	moveAgentState(o.pendingReplies, from, next.Key)
+	moveAgentState(o.unreadable, from, next.Key)
 	delete(o.threads, from)
 	if hasCapture && !timerMoved {
 		o.deb.ScheduleAfter(next.Key, 0)
@@ -527,6 +528,7 @@ func (o *outbound) Forget(ctx context.Context, key domain.Key) error {
 	delete(o.captures, key)
 	delete(o.refresh, key)
 	delete(o.pendingReplies, key)
+	delete(o.unreadable, key)
 	o.endTyping(key, "exited")
 	return o.retire(ctx, key, "exited")
 }
@@ -671,7 +673,7 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompleti
 	if !captured && (mode != domain.DoneScreen || wantMeta) {
 		r, err := o.replies.LastReply(ctx, agent)
 		if err == nil && !freshReply(hasTurn, t.started, r) {
-			err = fmt.Errorf("%w: stale transcript: written %s before the turn started", domain.ErrNoReply, t.started.Sub(r.Written).Round(time.Second))
+			err = fmt.Errorf("%w: written %s before the turn started", domain.ErrStaleTranscript, t.started.Sub(r.Written).Round(time.Second))
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
@@ -701,7 +703,7 @@ func (o *outbound) fire(ctx context.Context, key domain.Key, force, idleCompleti
 			mode = domain.DoneScreen
 		case err != nil && mode != domain.DoneScreen:
 			o.log.Info("reply source unavailable", slog.String("key", key.String()), slog.String("mode", string(mode)), slog.Any("err", logErr))
-			if !errors.Is(err, domain.ErrUnsupportedAgent) {
+			if !errors.Is(err, domain.ErrUnsupportedAgent) && !errors.Is(err, domain.ErrStaleTranscript) {
 				o.noteUnreadable(ctx, key, entry.ThreadID)
 			}
 			mode = domain.DoneScreen
@@ -1556,7 +1558,9 @@ func freshReply(hasTurn bool, turnStarted time.Time, r domain.Reply) bool {
 // unreadableNoticeAfter in a row it posts one notice in the topic: a
 // reader that quietly stopped working (a store grown past a limit, a
 // changed format) must not degrade to screens unnoticed. A readable reply
-// clears the count.
+// clears the count. Expected fallbacks (unsupported kinds, stale
+// transcripts) never get here. The notice is diagnostic: no sound, and
+// held like every other non-question post while quiet mode is at the desk.
 func (o *outbound) noteUnreadable(ctx context.Context, key domain.Key, threadID int) {
 	if o.unreadable == nil {
 		o.unreadable = map[domain.Key]int{}
@@ -1566,7 +1570,10 @@ func (o *outbound) noteUnreadable(ctx context.Context, key domain.Key, threadID 
 		return
 	}
 	o.unreadable[key] = 0
-	if _, err := o.tg.Send(ctx, domain.Outgoing{ThreadID: threadID, Text: unreadableNotice, Notify: true}); err != nil {
+	if o.quiet() && o.posts() == domain.PostsHeld {
+		return
+	}
+	if _, err := o.tg.Send(ctx, domain.Outgoing{ThreadID: threadID, Text: unreadableNotice, Notify: false}); err != nil {
 		o.log.Warn("unreadable notice failed", slog.String("key", key.String()), slog.String("err", err.Error()))
 		return
 	}

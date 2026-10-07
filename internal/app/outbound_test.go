@@ -1207,7 +1207,7 @@ func TestOutboundDoneSummaryLineUnavailable(t *testing.T) {
 	}
 	a := f.add(t, "p1", "t1", "reviewer", domain.StatusWorking)
 	f.herdr.SetScreen("p1", "recap: all tests pass")
-	f.replies.Fail(a.Key, fmt.Errorf("%w: unsupported agent %q", domain.ErrNoReply, "codex"))
+	f.replies.Fail(a.Key, fmt.Errorf("%w: unsupported agent %q", domain.ErrUnsupportedAgent, "codex"))
 	f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusDone)})
 	f.fire(t, 1)
 	if sent := f.tg.Sent(); len(sent) != 1 || sent[0].Footer != "" || sent[0].Text != "recap: all tests pass" {
@@ -1311,7 +1311,7 @@ func TestOutboundDoneReplyFallsBackToScreen(t *testing.T) {
 	}
 	a := f.add(t, "p1", "t1", "reviewer", domain.StatusWorking)
 	f.herdr.SetScreen("p1", "recap: all tests pass")
-	f.replies.Fail(a.Key, fmt.Errorf("%w: unsupported agent %q", domain.ErrNoReply, "codex"))
+	f.replies.Fail(a.Key, fmt.Errorf("%w: unsupported agent %q", domain.ErrUnsupportedAgent, "codex"))
 	f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusDone)})
 	f.fire(t, 1)
 	sent := f.tg.Sent()
@@ -2240,7 +2240,7 @@ func TestOutboundDoneDefaultsToFormatted(t *testing.T) {
 	}
 	b := f.add(t, "p2", "t2", "shell", domain.StatusWorking)
 	f.herdr.SetScreen("p2", "$ make test")
-	f.replies.Fail(b.Key, fmt.Errorf("%w: unsupported agent %q", domain.ErrNoReply, "pi"))
+	f.replies.Fail(b.Key, fmt.Errorf("%w: unsupported agent %q", domain.ErrUnsupportedAgent, "pi"))
 	f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(b, domain.StatusDone)})
 	f.fire(t, 1)
 	if sent := f.tg.Sent(); len(sent) != 1 || sent[0].Text != "$ make test" || !sent[0].Code {
@@ -2298,5 +2298,66 @@ func TestFreshReplySlack(t *testing.T) {
 		!freshReply(true, time.Time{}, domain.Reply{Written: start}) ||
 		!freshReply(true, start, domain.Reply{}) {
 		t.Fatal("unknown comparisons must count as fresh")
+	}
+}
+
+// TestOutboundUnreadableNotice: after unreadableNoticeAfter consecutive
+// done posts whose reply could not be read, one notice lands in the topic;
+// a readable reply clears the streak and an unsupported kind never counts.
+func TestOutboundUnreadableNotice(t *testing.T) {
+	f := newBridgeFixture(t)
+	f.herdr.SetScreen("p1", "raw screen text")
+	a := f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	fail := fmt.Errorf("%w: export failed", domain.ErrNoReply)
+	f.replies.Fail(a.Key, fail)
+	turn := func() {
+		f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusWorking)})
+		f.out.Observe(AgentEvent{Kind: AgentChanged, Agent: f.setStatus(a, domain.StatusDone)})
+		f.fire(t, 1)
+	}
+	notices := func() int {
+		n := 0
+		for _, s := range f.tg.Sent() {
+			if s.Text == unreadableNotice {
+				n++
+			}
+		}
+		return n
+	}
+	for i := 0; i < unreadableNoticeAfter-1; i++ {
+		turn()
+	}
+	if got := notices(); got != 0 {
+		t.Fatalf("notice before the streak: %d", got)
+	}
+	turn()
+	if got := notices(); got != 1 {
+		t.Fatalf("notices after the streak = %d, want 1", got)
+	}
+	// A readable reply clears the streak: the next failures start over.
+	f.replies.Set(a.Key, "the answer")
+	f.replies.SetMeta(a.Key, domain.TurnMeta{}, f.clock.Now().Add(time.Second))
+	turn()
+	f.replies.Fail(a.Key, fail)
+	for i := 0; i < unreadableNoticeAfter-1; i++ {
+		turn()
+	}
+	if got := notices(); got != 1 {
+		t.Fatalf("notices after a readable reply = %d, want 1", got)
+	}
+	// An unsupported kind never counts towards the notice.
+	g := newBridgeFixture(t)
+	g.herdr.SetScreen("p1", "raw screen text")
+	b := g.add(t, "p1", "t1", "shell", domain.StatusIdle)
+	g.replies.Fail(b.Key, fmt.Errorf("%w: unsupported agent %q", domain.ErrUnsupportedAgent, "shell"))
+	for i := 0; i < unreadableNoticeAfter+1; i++ {
+		g.out.Observe(AgentEvent{Kind: AgentChanged, Agent: g.setStatus(b, domain.StatusWorking)})
+		g.out.Observe(AgentEvent{Kind: AgentChanged, Agent: g.setStatus(b, domain.StatusDone)})
+		g.fire(t, 1)
+	}
+	for _, s := range g.tg.Sent() {
+		if s.Text == unreadableNotice {
+			t.Fatal("unsupported kind got the unreadable notice")
+		}
 	}
 }

@@ -120,6 +120,13 @@ const (
 	// transcript timestamps) when judging whether a reply belongs to the
 	// current turn.
 	turnStartSlack = 3 * time.Second
+	// unreadableNoticeAfter is how many consecutive done posts of an agent
+	// with a reader may fail to read a reply before one notice lands in its
+	// topic, so a reader that stopped working never degrades to screens
+	// unnoticed.
+	unreadableNoticeAfter = 4
+	// unreadableNotice is that notice's text.
+	unreadableNotice = "⚠️ I could not read this agent's replies for several turns and I am posting the screen instead: messages may be incomplete or cut. Check daemon.log for the reason."
 	// gitInlineRunes is the longest /git output posted as a message; longer
 	// output goes out as a document.
 	gitInlineRunes = 3600

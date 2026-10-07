@@ -43,7 +43,7 @@ func NewCodexDirectoryReader(exact *CodexReader, log *slog.Logger) *CodexDirecto
 // LastReply implements domain.ReplySource.
 func (r *CodexDirectoryReader) LastReply(ctx context.Context, agent domain.Agent) (domain.Reply, error) {
 	if agent.Kind != kindCodex {
-		return domain.Reply{}, fmt.Errorf("%w: unsupported agent %q", domain.ErrNoReply, agent.Kind)
+		return domain.Reply{}, fmt.Errorf("%w: unsupported agent %q", domain.ErrUnsupportedAgent, agent.Kind)
 	}
 	exact, exactErr := r.exact.LastReply(ctx, agent)
 	if exactErr != nil && !errors.Is(exactErr, domain.ErrNoReply) {

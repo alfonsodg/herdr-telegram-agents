@@ -431,6 +431,24 @@ func TestGatewayAgentNotIdleMapsBusyAndPreservesAPIError(t *testing.T) {
 	}
 }
 
+func TestGatewayAgentBlockedMapsSentinel(t *testing.T) {
+	s := testkit.NewNDJSONServer(t, nil)
+	const apiMessage = "agent w1:p1 is blocked and requires interactive input"
+	s.Handle("agent.prompt", func(id string, params json.RawMessage) (any, *testkit.APIError) {
+		return nil, &testkit.APIError{Code: codeAgentBlocked, Message: apiMessage}
+	})
+	g := newGateway(t, s)
+
+	err := g.Prompt(ctxT(t), "w1:p1", "que sigue?")
+	if !errors.Is(err, domain.ErrAgentBlocked) {
+		t.Fatalf("err = %v, want ErrAgentBlocked", err)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != codeAgentBlocked || apiErr.Message != apiMessage {
+		t.Fatalf("err = %v, want APIError %s with original message", err, codeAgentBlocked)
+	}
+}
+
 func TestGatewayRetriesDialOnce(t *testing.T) {
 	s := testkit.NewNDJSONServer(t, nil)
 	s.Handle("agent.prompt", ackHandler)

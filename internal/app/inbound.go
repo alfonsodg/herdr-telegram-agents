@@ -313,7 +313,13 @@ func (i *inbound) submitText(ctx context.Context, paneID string, status domain.S
 	if status == domain.StatusBlocked {
 		return i.herdr.SendText(ctx, paneID, text)
 	}
-	return i.herdr.Prompt(ctx, paneID, text)
+	err := i.herdr.Prompt(ctx, paneID, text)
+	if errors.Is(err, domain.ErrAgentBlocked) {
+		// The status flipped to blocked between routing and delivery (or
+		// Herdr saw a dialog the daemon had not): the text is its answer.
+		return i.herdr.SendText(ctx, paneID, text)
+	}
+	return err
 }
 
 // control sends one control key (esc or ctrl+c) to a live agent in any

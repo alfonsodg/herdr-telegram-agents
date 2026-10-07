@@ -1456,6 +1456,25 @@ func TestInboundPromptWhileBlockedTypesIntoTheDialog(t *testing.T) {
 	}
 }
 
+// TestInboundPromptBlockedGuardFallsBack: when Herdr refuses agent.prompt
+// with agent_blocked (the status flipped between routing and delivery, or
+// the daemon had not seen the dialog), the text still reaches the dialog
+// through pane.send_text.
+func TestInboundPromptBlockedGuardFallsBack(t *testing.T) {
+	f := newBridgeFixture(t)
+	f.add(t, "p1", "t1", "reviewer", domain.StatusIdle)
+	f.herdr.FailNext("prompt", domain.ErrAgentBlocked)
+	if err := f.in.HandleTopic(f.ctx, topicMsg(101, 5, "Que sigue?")); err != nil {
+		t.Fatal(err)
+	}
+	if texts := f.herdr.Texts(); len(texts) != 1 || texts[0] != "p1: Que sigue?" {
+		t.Fatalf("Texts = %q", texts)
+	}
+	if prompts := f.herdr.Prompts(); len(prompts) != 1 {
+		t.Fatalf("Prompts = %q", prompts)
+	}
+}
+
 func opCmd(id int, text string) domain.GeneralCommand {
 	return domain.GeneralCommand{MessageID: id, FromID: 1, Text: text, Role: domain.RoleOperator}
 }

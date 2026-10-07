@@ -16,6 +16,10 @@ var (
 	// ErrAgentBusy means Herdr cannot read alternate-screen history while
 	// the targeted agent is working.
 	ErrAgentBusy = errors.New("agent is busy")
+	// ErrAgentBlocked means Herdr refused a prompt because the agent waits
+	// at an approval or question dialog; the text must be typed into the
+	// dialog instead (pane.send_text).
+	ErrAgentBlocked = errors.New("agent is blocked")
 	// ErrTopicGone means the Telegram topic was deleted.
 	ErrTopicGone = errors.New("topic is gone")
 	// ErrTopicClosed means the Telegram topic is closed and rejects writes.
@@ -69,6 +73,11 @@ var (
 	// no text after the last prompt. Wrapped with the reason; the caller
 	// falls back to the screen.
 	ErrNoReply = errors.New("no reply available")
+	// ErrUnsupportedAgent means no reader understands the agent kind. It
+	// wraps ErrNoReply so the source chain keeps falling through to the
+	// screen, and it tells the caller this fallback is expected: an agent
+	// nobody can read, not a reader that broke.
+	ErrUnsupportedAgent = fmt.Errorf("agent kind not readable: %w", ErrNoReply)
 	// ErrFileTooBig means an attachment is larger than the inbox allows or
 	// than Telegram lets a bot download.
 	ErrFileTooBig = errors.New("file is too big")

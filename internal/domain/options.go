@@ -56,6 +56,9 @@ const (
 	// OptionSyncDashboard keeps one pinned message in General that lists
 	// every live agent with its status, edited in place and never ringing.
 	OptionSyncDashboard = "sync.dashboard"
+	// OptionSyncQuota adds the Claude and Codex usage windows under the
+	// dashboard and /status.
+	OptionSyncQuota = "sync.quota"
 	// OptionRedact switches the secret redaction of every post on or off.
 	OptionRedact = "privacy.redact"
 	// OptionDeleteAfterDays is how long a closed topic of an exited agent
@@ -219,6 +222,18 @@ func buildOptionSpecs() []OptionSpec {
 			Group:       GroupSync,
 			Title:       "Dashboard in General",
 			Description: "One pinned message in General, edited in place and never ringing: every live agent with its status, how long it has been in it and a link to its topic. Off unpins and deletes it.",
+			Kind:        KindBool,
+			Default:     "true",
+		},
+		// On by default: the quota lines only change the text of messages
+		// that are edited in place, which never ring, and a provider with
+		// no data shows nothing, so a fresh install looks the same until a
+		// source has data (decided 2026-10-07).
+		{
+			Key:         OptionSyncQuota,
+			Group:       GroupSync,
+			Title:       "Quota in the dashboard",
+			Description: "Claude and Codex usage windows under the dashboard and /status. Codex is read from its session files; Claude needs the status line tap shown by doctor.",
 			Kind:        KindBool,
 			Default:     "true",
 		},
@@ -895,6 +910,10 @@ func (o Options) SyncEnabled() bool { return o.Bool(OptionSyncEnabled) }
 // DashboardEnabled reports whether the pinned status message in General
 // is kept.
 func (o Options) DashboardEnabled() bool { return o.Bool(OptionSyncDashboard) }
+
+// QuotaEnabled reports whether the dashboard and /status show the usage
+// windows of Claude and Codex.
+func (o Options) QuotaEnabled() bool { return o.Bool(OptionSyncQuota) }
 
 // PagerEnabled reports whether questions ring from the bot's private chat
 // instead of the topic post.

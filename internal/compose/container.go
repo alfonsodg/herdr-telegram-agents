@@ -192,6 +192,12 @@ func Notify(ctx context.Context, env PluginEnv, body string, log *slog.Logger) e
 	return g.Notify(ctx, NotifyTitle, body, domain.NotifySoundDefault)
 }
 
+// TapClaudeUsage is the status line tap behind `herdr-tg usage-tap`: it
+// copies in to out and stores Claude Code's rate-limit windows at path.
+func TapClaudeUsage(in io.Reader, out io.Writer, path string) error {
+	return state.TapClaudeUsage(in, out, path, time.Now)
+}
+
 // PaneOpener returns the herdr CLI runner used to open manifest panes.
 // OpenShared opens a file for reading without blocking a rename or delete
 // by another process; the logs pane uses it so that following the log does

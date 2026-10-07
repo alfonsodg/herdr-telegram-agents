@@ -361,6 +361,13 @@ type IdleSource interface {
 	Idle(ctx context.Context) (time.Duration, error)
 }
 
+// UsageSource reports one provider's usage windows (Claude Code from its
+// status line tap, Codex from its session files). ok is false when the
+// provider has no data yet, which is not an error.
+type UsageSource interface {
+	Usage(ctx context.Context) (usage Usage, ok bool, err error)
+}
+
 // Clock abstracts time so the application layer is testable without sleeping.
 type Clock interface {
 	Now() time.Time

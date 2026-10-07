@@ -288,6 +288,21 @@ option of the Posts group:
   `herdr integration install codex` so Herdr reports `agent_session`. Codex is
   read from the daemon's own home directory (`~/.codex`; `CODEX_HOME` is not
   honoured), so a Codex running inside WSL is not found.
+  For Antigravity (`agy`), Herdr reports the conversation id as the pane's
+  `agent_session`, and the daemon opens that conversation's transcript,
+  `~/.gemini/antigravity-cli/brain/<conversation id>/.system_generated/logs/transcript.jsonl`,
+  or `transcript_full.jsonl` beside it when the first is missing or holds
+  nothing the reader knows. The id must be a UUID, the lookup never leaves
+  the `brain` directory, and a link in place of the transcript is refused.
+  It reads the file from the end within the same 4 MiB budget and posts the
+  newest model answer (`PLANNER_RESPONSE` with text and no tool calls); the
+  commentary Antigravity writes next to a tool call is never posted. When the
+  newest record is tool output, a tool call, a new prompt or a half-written
+  line, the turn is still running and the done post waits and reads again,
+  as for OpenCode. A pane whose conversation no longer matches the topic
+  gets the screen. The conversation id and the path are used for that one
+  lookup and never stored or logged. The transcript is read from the
+  daemon's own home directory; a moved `~/.gemini` is not followed.
 - **Formatted** (default): the same reply rendered for Telegram: headings become bold,
   `- ` lists become `•`, quotes get a bar, `[text](url)` becomes a link,
   inline code and fenced blocks keep their monospace, pipe tables are
@@ -295,7 +310,8 @@ option of the Posts group:
   are split and stop after five messages with `… (+N chars)` at the end.
   Should Telegram reject the markup (`can't parse entities`), that part is
   sent once more as a plain code block and the log says so. An agent with
-  no readable reply (any kind other than Claude Code, Codex and OpenCode,
+  no readable reply (any kind other than Claude Code, Codex, OpenCode and
+  Antigravity,
   or a missing or stale transcript) gets the screen post instead.
 
 `Formatted` has been the default since 2026-10-01; before that it was
@@ -314,10 +330,11 @@ excluded) and how many output tokens it wrote (summed once per API
 response). A part the transcript does not know is left out; nothing known
 means no line. There is no cost: Claude Code writes the cost once at the
 end of the session, not per turn, and a price table would drift from what
-the status line shows. Claude Code, OpenCode and Codex only (for OpenCode the
+the status line shows. Claude Code, OpenCode, Codex and Antigravity only (for OpenCode the
   edited files are distinct paths from completed `edit` and `write` tools; for
 Codex the line has the duration, the model and the output tokens, but no files,
-as its rollout does not name them reliably): a pane of another kind, a
+as its rollout does not name them reliably; for Antigravity the line has the
+duration only, as its transcript names neither the model nor the files): a pane of another kind, a
   pane without a working directory or one without a transcript directory
 posts as before and the log says why at debug (`turn meta unavailable`). In `Screen` mode
 the transcript is read for the line alone. A transcript last written
@@ -338,10 +355,10 @@ never folds. `Screen` posts are never folded, whatever the option says.
 Limits worth knowing: two Claude Code panes in the same directory cannot be
 told apart, so the reply of the one that wrote last wins (the stale check
 above catches the case where the other pane wrote before this turn began);
-other agents (Pi, Gemini) always get the screen; when no transcript or no
+other agents (Pi, Gemini, Muse) always get the screen; when no transcript or no
 text is found the daemon posts the screen and logs `reply source
 unavailable` with a safe category. Blocked posts are never affected: the dialog
-with its buttons exists only on the screen. For an idle or done OpenCode or Codex agent,
+with its buttons exists only on the screen. For an idle or done OpenCode, Codex or Antigravity agent,
 a bare `/screen` tries the current session reply, rendered like `Formatted`,
 whatever `Done post` says. It falls back to the screen when the reply is
 unavailable, empty, or stale. The reply stops after five Telegram messages

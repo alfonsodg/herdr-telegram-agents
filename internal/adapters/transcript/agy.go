@@ -50,7 +50,8 @@ func newAgyReader(session func(context.Context, string) (domain.SessionTuple, er
 
 // LastReply returns the newest complete model answer Antigravity recorded
 // for the pane's conversation. Every failure is domain.ErrNoReply wrapped
-// with a reason; a running turn answers domain.ErrReplyPending.
+// with a reason; a running turn answers "no reply" and the caller falls
+// back to the screen.
 func (r *AgyReader) LastReply(ctx context.Context, agent domain.Agent) (domain.Reply, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.Reply{}, err
@@ -82,7 +83,10 @@ func (r *AgyReader) LastReply(ctx context.Context, agent domain.Agent) (domain.R
 			continue
 		}
 		if state == agyPending {
-			return domain.Reply{}, fmt.Errorf("%w: the turn is still running", domain.ErrReplyPending)
+			// Antigravity has no pending sentinel dependency here: a turn
+			// that is still running answers "no reply" and the done post
+			// falls back to the screen, like the Codex reader does.
+			return domain.Reply{}, fmt.Errorf("%w: the agy turn is still running", domain.ErrNoReply)
 		}
 		if state == agyFound {
 			text, written, found = got, when, true

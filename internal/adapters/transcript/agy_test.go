@@ -97,8 +97,8 @@ func TestAgyLastReplyPendingOrMissing(t *testing.T) {
 		tuple domain.SessionTuple
 		want  error
 	}{
-		"turn still running after the answer": {lines: []string{agyAnswer("2026-10-06T13:14:14-05:00", "answer"), agyOutput()}, tuple: agyTuple, want: domain.ErrReplyPending},
-		"planner tool step after the answer":  {lines: []string{agyAnswer("2026-10-06T13:14:14-05:00", "answer"), agyTool()}, tuple: agyTuple, want: domain.ErrReplyPending},
+		"turn still running after the answer": {lines: []string{agyAnswer("2026-10-06T13:14:14-05:00", "answer"), agyOutput()}, tuple: agyTuple, want: domain.ErrNoReply},
+		"planner tool step after the answer":  {lines: []string{agyAnswer("2026-10-06T13:14:14-05:00", "answer"), agyTool()}, tuple: agyTuple, want: domain.ErrNoReply},
 		"no answer yet":                       {lines: []string{agyOutput()}, tuple: agyTuple, want: domain.ErrNoReply},
 		"pane runs another session":           {lines: []string{agyAnswer("2026-10-06T13:14:14-05:00", "answer")}, tuple: other, want: domain.ErrNoReply},
 		"no transcript yet":                   {lines: nil, tuple: agyTuple, want: domain.ErrNoReply},

@@ -166,7 +166,8 @@ func (p *PrivateOutput) deliver(ctx context.Context, job privateOutputPending) e
 		if text == "" || (p.last[o.GrantID] == hash || m.LastOutput == hash) {
 			continue
 		}
-		buttons := p.dialogButtons(o, screen.Text, job.agent.Status)
+		c.dropDialogButtons(o)
+		buttons := p.dialogButtons(o, screen.Text, job.agent)
 		id, err := c.Telegram.SendAt(ctx, o.Address, domain.Outgoing{Text: text, Code: !formatted, Markdown: formatted, Footer: footer, Fold: m.Preferences.Fold, Notify: job.agent.Status == domain.StatusBlocked && !m.Preferences.Silent && !job.silent, Buttons: buttons, MaxParts: 4}, c.Sharing.Guard(o, domain.ShareOutput))
 		if err != nil {
 			if errors.Is(err, domain.ErrForbidden) || errors.Is(err, domain.ErrRecipientUnavailable) {
@@ -189,16 +190,16 @@ func (p *PrivateOutput) deliver(ctx context.Context, job privateOutputPending) e
 	return nil
 }
 
-func (p *PrivateOutput) dialogButtons(o domain.ShareOrigin, screen string, status domain.Status) []domain.Button {
+func (p *PrivateOutput) dialogButtons(o domain.ShareOrigin, screen string, agent domain.Agent) []domain.Button {
 	st, _ := p.Control.Sharing.Snapshot()
 	g := st.Grants[o.GrantID]
-	if status != domain.StatusBlocked || !domain.SharePermits(g, domain.ShareDialog) {
+	if agent.Status != domain.StatusBlocked || !domain.SharePermits(g, domain.ShareDialog) {
 		return nil
 	}
 	d := domain.ParseDialog(screen)
 	var buttons []domain.Button
 	add := func(label, kind string, keys []string) {
-		ref := p.Control.button(privateButton{origin: o, kind: kind, keys: keys, expires: p.Control.Now().Add(10 * time.Minute)})
+		ref := p.Control.button(privateButton{origin: o, kind: kind, keys: keys, expires: p.Control.Now().Add(10 * time.Minute), seq: agent.StateChangeSeq})
 		buttons = append(buttons, domain.Button{Text: label, Data: ref})
 	}
 	for _, choice := range d.Choices {

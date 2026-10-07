@@ -254,6 +254,11 @@ requests in a separate operating-system account.
 | `/pause`, `/resume`, `/alias NAME` | Local mirror settings; Read or Control |
 | `/silent`, `/display screen\|reply\|formatted`, `/fold 0..200`, `/metadata` | Local display and notification settings |
 
+Dialog buttons in a private topic answer only the question they were drawn
+under: once that question is answered elsewhere, or a newer post replaces the
+keyboard, a press answers `That question is no longer open.` and sends
+nothing.
+
 `/silent` and `/metadata` toggle their settings. `/alias` without a name restores
 the agent label. Pausing suppresses automatic output and status edits; explicit
 screen requests still work. Resuming requests at most the current relevant

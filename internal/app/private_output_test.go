@@ -71,8 +71,7 @@ func TestTwoControllersCannotSubmitSameDialog(t *testing.T) {
 	f.h.SetScreen("p", "1. Allow\n2. Deny")
 	output := &app.PrivateOutput{Control: f.p}
 	f.p.Output = output
-	a, _ := f.s.Agent(f.g.Key)
-	a.Status = domain.StatusBlocked
+	a := f.setAgent(domain.StatusBlocked, 1)
 	output.Observe(app.AgentEvent{Kind: app.AgentChanged, Agent: a})
 	f.now = f.now.Add(3 * time.Second)
 	if err := output.Tick(ctx); err != nil {
@@ -91,5 +90,51 @@ func TestTwoControllersCannotSubmitSameDialog(t *testing.T) {
 	}
 	if len(f.h.Keys()) != 1 {
 		t.Fatal("two controllers submitted the same dialog")
+	}
+}
+
+// TestPrivateOldDialogButtonDoesNotAnswerANewDialog: a dialog answered
+// elsewhere (the owner at the desk) and followed by a new one must not take
+// the old keyboard's press: "1 Allow" for the first question would approve
+// the second. Covered both before the new dialog is mirrored (the agent's
+// state moved on) and after (a newer post replaced the keyboard).
+func TestPrivateOldDialogButtonDoesNotAnswerANewDialog(t *testing.T) {
+	for _, mirrored := range []bool{false, true} {
+		t.Run(map[bool]string{false: "before_new_post", true: "after_new_post"}[mirrored], func(t *testing.T) {
+			f := newPrivateFixture(t, domain.ShareControl)
+			ctx := context.Background()
+			output := &app.PrivateOutput{Control: f.p}
+			f.p.Output = output
+			f.h.SetScreen("p", "Read file foo?\n1. Allow\n2. Deny")
+			output.Observe(app.AgentEvent{Kind: app.AgentChanged, Agent: f.setAgent(domain.StatusBlocked, 1)})
+			f.now = f.now.Add(3 * time.Second)
+			if err := output.Tick(ctx); err != nil {
+				t.Fatal(err)
+			}
+			sent := f.tg.Destination(10).Sent()
+			old := sent[len(sent)-1]
+			if len(old.Buttons) == 0 {
+				t.Fatalf("first dialog posted without buttons: %+v", old)
+			}
+			// The owner answers at the desk; the agent works, then asks again.
+			f.setAgent(domain.StatusWorking, 2)
+			f.h.SetScreen("p", "Run rm -rf build?\n1. Yes\n2. No")
+			blocked := f.setAgent(domain.StatusBlocked, 3)
+			if mirrored {
+				output.Observe(app.AgentEvent{Kind: app.AgentChanged, Agent: blocked})
+				f.now = f.now.Add(3 * time.Second)
+				if err := output.Tick(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			press := domain.PrivateMessage{Contact: domain.PrivateContact{ActorID: 10}, Address: f.origin.Address,
+				MessageID: 1000 + len(sent) - 1, CallbackID: "old", CallbackData: old.Buttons[0].Data}
+			if err := f.p.Handle(ctx, press); err != nil {
+				t.Fatal(err)
+			}
+			if keys := f.h.Keys(); len(keys) != 0 {
+				t.Fatalf("old Allow button answered the new dialog: %+v", keys)
+			}
+		})
 	}
 }

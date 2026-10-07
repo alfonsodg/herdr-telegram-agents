@@ -20,6 +20,16 @@ type privateFixture struct {
 	g      domain.ShareGrant
 	origin domain.ShareOrigin
 	now    time.Time
+	// agent is what f.s.Agent reports; tests move its status and
+	// StateChangeSeq through setAgent.
+	agent *domain.Agent
+}
+
+// setAgent moves the shared agent to status with a new StateChangeSeq and
+// returns it.
+func (f *privateFixture) setAgent(status domain.Status, seq int64) domain.Agent {
+	f.agent.Status, f.agent.StateChangeSeq = status, seq
+	return *f.agent
 }
 
 func newPrivateFixture(t *testing.T, role domain.ShareRole) *privateFixture {
@@ -30,7 +40,8 @@ func newPrivateFixture(t *testing.T, role domain.ShareRole) *privateFixture {
 	f.s.BotID = 42
 	f.s.Now = func() time.Time { return f.now }
 	a := domain.Agent{Key: domain.Key{PaneID: "p", TerminalID: "t", SessionDigest: "digest"}, Name: "agent", Status: domain.StatusIdle, Kind: "claude"}
-	f.s.Agent = func(k domain.Key) (domain.Agent, bool) { return a, k == a.Key }
+	f.agent = &a
+	f.s.Agent = func(k domain.Key) (domain.Agent, bool) { return *f.agent, k == f.agent.Key }
 	_, err := f.s.Register(ctx, 10, 10, "name", "", f.now)
 	if err != nil {
 		t.Fatal(err)

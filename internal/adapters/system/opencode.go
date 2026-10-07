@@ -135,7 +135,7 @@ func (e *OpenCodeExporter) Export(ctx context.Context, sessionID string) ([]byte
 			category = "exit_nonzero"
 		}
 	}
-	e.log.Debug("opencode export", slog.Int64("dur_ms", time.Since(start).Milliseconds()),
+	e.log.Debug("opencode export", slog.String("source", "export"), slog.Int64("dur_ms", time.Since(start).Milliseconds()),
 		slog.Int("bytes", len(result.out)), slog.Bool("capped", result.capped),
 		slog.String("category", category), slog.Int("exit_code", exitCode))
 	switch {

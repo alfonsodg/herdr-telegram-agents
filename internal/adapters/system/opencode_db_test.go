@@ -107,7 +107,9 @@ func TestOpenCodeExporterReadsDatabaseFirst(t *testing.T) {
 }
 
 func TestOpenCodeExporterUsesFilePathOverPath(t *testing.T) {
-	rows := sqliteJSON(t, sqliteRow{"assistant", `{"content":[
+	rows := sqliteJSON(t,
+		sqliteRow{"user", `{"time":{"created":1}}`},
+		sqliteRow{"assistant", `{"content":[
 		{"type":"text","text":"ok"},
 		{"type":"tool","name":"write","state":{"status":"completed","input":{"filePath":"/export/style.go","path":"/db/style.go"}}}
 	]}`})
@@ -154,6 +156,22 @@ func TestOpenCodeExporterDatabaseResultCapFallsBack(t *testing.T) {
 	out, err := e.Export(context.Background(), "ses_test")
 	if err != nil || strings.TrimSpace(string(out)) != `{"sentinel":true}` {
 		t.Fatalf("fallback = %q, %v", out, err)
+	}
+}
+
+func TestOpenCodeExporterFallsBackOnForeignSchema(t *testing.T) {
+	for name, rows := range map[string]string{
+		"unparsable row":  `[{"type":"assistant","data":"not json"}]`,
+		"no user prompt":  `[{"type":"synthetic","data":"{}"}]`,
+		"missing columns": `[{"data":"{\"time\":{\"created\":1}}"}]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := dbExport(t, []byte(rows), nil)
+			out, err := e.Export(context.Background(), "ses_test")
+			if err != nil || strings.TrimSpace(string(out)) != `{"sentinel":true}` {
+				t.Fatalf("fallback = %q, %v", out, err)
+			}
+		})
 	}
 }
 

@@ -79,7 +79,7 @@ func (e *OpenCodeExporter) exportFromDB(ctx context.Context, sessionID string) (
 	if len(doc) > openCodeDBMaxResult {
 		return nil, fmt.Errorf("rebuilt document over %d bytes", openCodeDBMaxResult)
 	}
-	e.log.Debug("opencode db read", slog.Int64("dur_ms", time.Since(start).Milliseconds()),
+	e.log.Debug("opencode read", slog.String("source", "db"), slog.Int64("dur_ms", time.Since(start).Milliseconds()),
 		slog.Int("rows", len(rows)), slog.Int("bytes", len(raw)), slog.Int("result_bytes", len(doc)))
 	return doc, nil
 }
@@ -110,7 +110,11 @@ func runOpenCodeSQLite(ctx context.Context, dbPath, query string) ([]byte, error
 	if err != nil {
 		return nil, errors.New("sqlite3 not on PATH")
 	}
-	cmd := command(ctx, bin, "-readonly", "-json", "-cmd", ".timeout 4000", dbPath, query)
+	// The database is opened through a file: URI in read-only mode and with
+	// an empty init file, so neither a relative path nor ~/.sqliterc can
+	// take over the CLI.
+	uri := "file:" + filepath.ToSlash(dbPath) + "?mode=ro"
+	cmd := command(ctx, bin, "-json", "-init", os.DevNull, "-cmd", ".timeout 4000", uri, query)
 	cmd.WaitDelay = openCodeWaitDelay
 	cmd.Stderr = io.Discard
 	stdout := &limitedWriter{max: openCodeDBMaxOutput}
@@ -168,9 +172,12 @@ type openCodeDBPart struct {
 // rebuilt document is a fraction of the window's raw size.
 func rebuildOpenCodeDBDoc(sessionID string, rows []openCodeDBRow) ([]byte, error) {
 	doc := openCodeRebuiltDoc{Info: openCodeRebuiltInfo{ID: sessionID}}
+	prompts := 0
 	for _, row := range rows {
 		switch row.Type {
-		case "user", "assistant":
+		case "user":
+			prompts++
+		case "assistant":
 		default:
 			continue // idle, compaction, synthetic, system: bookkeeping
 		}
@@ -179,6 +186,11 @@ func rebuildOpenCodeDBDoc(sessionID string, rows []openCodeDBRow) ([]byte, error
 			return nil, err
 		}
 		doc.Messages = append(doc.Messages, msg)
+	}
+	if prompts == 0 {
+		// A store whose shape this build does not know (a future schema):
+		// fail closed and let the CLI export answer instead.
+		return nil, errors.New("no user prompt in the database window")
 	}
 	return json.Marshal(doc)
 }

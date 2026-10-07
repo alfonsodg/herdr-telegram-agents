@@ -109,7 +109,7 @@ func TestOpenCodeExporterReadsDatabaseFirst(t *testing.T) {
 func TestOpenCodeExporterUsesFilePathOverPath(t *testing.T) {
 	rows := sqliteJSON(t,
 		sqliteRow{"user", `{"time":{"created":1}}`},
-		sqliteRow{"assistant", `{"content":[
+		sqliteRow{"assistant", `{"time":{"created":2},"content":[
 		{"type":"text","text":"ok"},
 		{"type":"tool","name":"write","state":{"status":"completed","input":{"filePath":"/export/style.go","path":"/db/style.go"}}}
 	]}`})
@@ -151,7 +151,9 @@ func TestOpenCodeExporterRejectsDatabaseUnsafeSessionIDs(t *testing.T) {
 
 func TestOpenCodeExporterDatabaseResultCapFallsBack(t *testing.T) {
 	huge := strings.Repeat("x", openCodeDBMaxResult+1)
-	rows := sqliteJSON(t, sqliteRow{"assistant", `{"content":[{"type":"text","text":"` + huge + `"}]}`})
+	rows := sqliteJSON(t,
+		sqliteRow{"user", `{"time":{"created":1}}`},
+		sqliteRow{"assistant", `{"time":{"created":2},"content":[{"type":"text","text":"` + huge + `"}]}`})
 	e := dbExport(t, rows, nil)
 	out, err := e.Export(context.Background(), "ses_test")
 	if err != nil || strings.TrimSpace(string(out)) != `{"sentinel":true}` {

@@ -205,7 +205,17 @@ func rebuildOpenCodeDBMessage(role, data string) (openCodeRebuiltMessage, error)
 		Time: openCodeRebuiltTime{Created: raw.Time.Created, Completed: raw.Time.Completed},
 	}
 	if role == "user" {
+		if raw.Time.Created == 0 {
+			// A payload this build does not know (renamed fields): fail
+			// closed so the export can answer.
+			return openCodeRebuiltMessage{}, errors.New("user row without a creation time")
+		}
 		return msg, nil
+	}
+	if raw.Time.Created == 0 || len(raw.Content) == 0 {
+		// Unmarshal accepts null, {} and renamed fields with zero values;
+		// require the shape the rebuild needs before accepting the row.
+		return openCodeRebuiltMessage{}, errors.New("assistant row without a creation time or content")
 	}
 	msg.Model = &openCodeRebuiltModel{ID: raw.Model.ID}
 	msg.Tokens = &openCodeRebuiltTokens{Output: raw.Tokens.Output}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
@@ -134,7 +135,10 @@ func (p *Presence) sample(ctx context.Context) {
 		}
 		// With no source the daemon assumes the operator is at the desk:
 		// quiet starts on (Telegram silent) until /away says otherwise.
-		if !p.awayChosen && !p.manualAway && !p.manualHere {
+		// Only on a graphical session: on a headless server (no
+		// WAYLAND_DISPLAY/DISPLAY/XDG_SESSION_TYPE) the safe default stays
+		// "everything" so posts are never held forever.
+		if hasGraphicalSession(os.LookupEnv) && !p.awayChosen && !p.manualAway && !p.manualHere {
 			p.manualHere, p.manualHereAuto = true, true
 			p.log.Info("presence: no idle source, starting at the desk until /away")
 		}
@@ -146,7 +150,7 @@ func (p *Presence) sample(ctx context.Context) {
 			p.failing = true
 			p.log.Warn("presence sample failed, keeping the previous verdict", slog.String("err", err.Error()), slog.Bool("at_desk", p.atDesk))
 		}
-		if !p.awayChosen && !p.manualAway && !p.manualHere && !p.sampled {
+		if hasGraphicalSession(os.LookupEnv) && !p.awayChosen && !p.manualAway && !p.manualHere && !p.sampled {
 			// The source exists but never gave a verdict (a Wayland session
 			// the probes cannot read): assume the operator is at the desk.
 			p.manualHere, p.manualHereAuto = true, true
@@ -235,4 +239,17 @@ func (p *Presence) recompute() {
 	default:
 	}
 	p.changes <- quiet
+}
+
+// hasGraphicalSession reports whether the process runs inside a graphical
+// session (Wayland or X11). On a headless server none of these are set and
+// the "at the desk by default" assumption must not apply, so quiet never
+// engages on its own.
+func hasGraphicalSession(lookup func(string) (string, bool)) bool {
+	for _, key := range []string{"WAYLAND_DISPLAY", "DISPLAY", "XDG_SESSION_TYPE"} {
+		if v, ok := lookup(key); ok && v != "" {
+			return true
+		}
+	}
+	return false
 }

@@ -141,6 +141,8 @@ func presenceHeaderText(p *Presence, quietEnabled bool, clock domain.Clock) stri
 		return presenceHeaderOpen
 	case st.ManualAway:
 		return fmt.Sprintf(presenceHeaderManual, wallClock(clock, st.Until))
+	case st.ManualHere:
+		return presenceHeaderManualHere
 	case st.Quiet:
 		return presenceHeaderQuiet
 	}

@@ -105,6 +105,7 @@ const (
 	// Headers of the General /status summary.
 	presenceHeaderQuiet  = "🔕 quiet: you are at the desk (/away to override)\n"
 	presenceHeaderManual = "🏃 away (manual) until %s\n"
+	presenceHeaderManualHere = "🖐 presence by hand: /away when you leave\n"
 	presenceHeaderOpen   = "🏃 away (manual) until /here\n"
 	presenceTimeLayout   = "15:04"
 )

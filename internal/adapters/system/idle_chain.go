@@ -26,6 +26,12 @@ type idleProbe struct {
 // has no source (ErrIdleUnsupported, final for the tracker). Probes that
 // exist but fail give a plain error naming each one, so a transient failure
 // keeps the previous verdict instead of switching quiet mode off.
+//
+// Definitive answers (ServiceUnknown from Mutter, NotSupported from
+// org.freedesktop.ScreenSaver, XWayland without MIT-SCREEN-SAVER) are treated
+// as "no source": they are not added to errs, so a chain where every
+// available probe answers definitively resolves to ErrIdleUnsupported instead
+// of a (never-recovering) probeErrors.
 func sampleChain(ctx context.Context, probes []idleProbe) (time.Duration, string, error) {
 	var errs []error
 	for _, p := range probes {
@@ -37,11 +43,17 @@ func sampleChain(ctx context.Context, probes []idleProbe) (time.Duration, string
 		}
 		out, err := p.run(ctx)
 		if err != nil {
+			if isDefinitiveNoSource(err) {
+				continue
+			}
 			errs = append(errs, fmt.Errorf("%s: %w", p.name, err))
 			continue
 		}
 		d, err := p.parse(out)
 		if err != nil {
+			if isDefinitiveNoSource(err) {
+				continue
+			}
 			errs = append(errs, fmt.Errorf("%s: %w", p.name, err))
 			continue
 		}
@@ -51,6 +63,30 @@ func sampleChain(ctx context.Context, probes []idleProbe) (time.Duration, string
 		return 0, "", domain.ErrIdleUnsupported
 	}
 	return 0, "", probeErrors(errs)
+}
+
+// isDefinitiveNoSource reports whether err is a definitive "no idle source
+// on this machine" answer rather than a transient failure: Mutter's
+// ServiceUnknown (GNOME not running), org.freedesktop.ScreenSaver's
+// NotSupported, and XWayland without MIT-SCREEN-SAVER. These leave the
+// failing loop and resolve to ErrIdleUnsupported.
+func isDefinitiveNoSource(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	for _, marker := range []string{
+		"serviceunknown",
+		"notsupported",
+		"mit-screen-saver",
+		"no x11 display",
+		"unable to open display",
+	} {
+		if strings.Contains(msg, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // probeErrors is every failed probe's reason on one line for the log;

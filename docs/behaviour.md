@@ -726,7 +726,9 @@ you can see the plugin working. Tick `Quiet while at the desk` in
   `xprintidle` installed — the source may exist and never answer) quiet
   **starts at the desk** when the option is on: Telegram stays silent,
   `/away` releases it, a timed `/away` hands the default back when it
-  expires and `/here` brings it back by hand. The daemon logs one warning
+  expires and `/here` brings it back by hand. This only happens in a
+  graphical session (Wayland or X11); on a headless server quiet stays off
+  by default, so posts are never held forever. The daemon logs one warning
   at start (`no input idle source` or `presence sample failed`) and retries
   once a minute, so a source that appears later takes over. When a source
   exists but a sample fails (a timeout, the session bus not up yet), the
@@ -737,7 +739,8 @@ you can see the plugin working. Tick `Quiet while at the desk` in
   at the desk (quiet)` once per period; blocked and done screens follow
   `Screen posts` (silent by default). Everything you send to agents, `/screen`,
   `/status` and the buttons keep working. `/status` starts with `🔕 quiet: you
-  are at the desk (/away to override)`.
+  are at the desk (/away to override)`, or `🖐 presence by hand: /away when
+  you leave` when quiet is on by hand (no input idle source).
 - **When you leave** (idle passes the threshold, `/away`, or quiet mode is
   switched off in the panel): one reconcile pass creates, renames, closes and
   repaints only the topics that drifted, then every agent still blocked whose

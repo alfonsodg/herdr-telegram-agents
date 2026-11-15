@@ -107,6 +107,10 @@ func (p *panel) startUpdate(ctx context.Context, intentID string, panelID int, o
 		PriorRunning: p.running(), StartedAt: p.updates.now().UTC(), NotificationStatus: "pending",
 		ChatID: p.chatID, PanelMessageID: panelID,
 	}
+	if check.Installation.SourceKind == "github" && ownsManagedPin(check.Installation, previous) {
+		job.PreviousOwnedRef = check.Installation.RequestedRef
+		job.PreviousOwnedCommit = check.Installation.ResolvedCommit
+	}
 	if err := p.jobs.Save(ctx, job); err != nil {
 		return job, err
 	}

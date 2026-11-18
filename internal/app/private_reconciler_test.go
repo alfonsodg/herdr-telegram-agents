@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"errors"
+	"sort"
 	"testing"
 	"time"
 
@@ -331,6 +332,10 @@ func TestPrivateReconcilerRetriesDoNotStarveLaterGrants(t *testing.T) {
 	a := domain.Agent{Key: domain.Key{PaneID: "p", TerminalID: "t", SessionDigest: "digest"}, Name: "Before", Status: domain.StatusIdle}
 	s.Agent = func(k domain.Key) (domain.Agent, bool) { return a, k == a.Key }
 	tg := testkit.NewFakeTelegram(nil)
+	var grants []struct {
+		id        string
+		recipient int64
+	}
 	for recipient := int64(10); recipient < 15; recipient++ {
 		if _, err := s.Register(ctx, recipient, recipient, "name", "", now); err != nil {
 			t.Fatal(err)
@@ -342,8 +347,14 @@ func TestPrivateReconcilerRetriesDoNotStarveLaterGrants(t *testing.T) {
 		if err := (&app.PrivateReconciler{Sharing: s, Telegram: tg, Agent: s.Agent, Now: s.Now}).Grant(ctx, g); err != nil {
 			t.Fatal(err)
 		}
+		grants = append(grants, struct {
+			id        string
+			recipient int64
+		}{g.ID, recipient})
 		tg.Destination(recipient).FailNext("edit", errors.New("temporary network failure"))
 	}
+	sort.Slice(grants, func(i, j int) bool { return grants[i].id < grants[j].id })
+	laterRecipient := grants[len(grants)-1].recipient
 	r := &app.PrivateReconciler{Sharing: s, Telegram: tg, Agent: s.Agent, Now: s.Now}
 	a.Name = "After"
 	if err := r.Observe(ctx, app.AgentEvent{Kind: app.AgentAppeared, Agent: a}); err != nil {
@@ -353,27 +364,27 @@ func TestPrivateReconcilerRetriesDoNotStarveLaterGrants(t *testing.T) {
 	if err := r.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := privateEditCalls(tg.Destination(14)); got != 0 {
+	if got := privateEditCalls(tg.Destination(laterRecipient)); got != 0 {
 		t.Fatalf("fifth grant edit calls after capped pass = %d, want it deferred", got)
 	}
-	for recipient := int64(10); recipient < 13; recipient++ {
-		tg.Destination(recipient).FailNext("edit", errors.New("temporary network failure"))
+	for _, grant := range grants[:len(grants)-1] {
+		tg.Destination(grant.recipient).FailNext("edit", errors.New("temporary network failure"))
 	}
 	now = now.Add(time.Second)
 	if err := r.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := privateEditCalls(tg.Destination(14)); got != 1 {
+	if got := privateEditCalls(tg.Destination(laterRecipient)); got != 1 {
 		t.Fatalf("fifth grant edit calls after next pass = %d, want one initial attempt", got)
 	}
-	for recipient := int64(10); recipient < 14; recipient++ {
-		tg.Destination(recipient).FailNext("edit", errors.New("temporary network failure"))
+	for _, grant := range grants[:len(grants)-1] {
+		tg.Destination(grant.recipient).FailNext("edit", errors.New("temporary network failure"))
 	}
 	now = now.Add(time.Second)
 	if err := r.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := privateEditCalls(tg.Destination(14)); got != 2 {
+	if got := privateEditCalls(tg.Destination(laterRecipient)); got != 2 {
 		t.Fatalf("fifth grant retry calls = %d, want progress despite first four failures", got)
 	}
 }

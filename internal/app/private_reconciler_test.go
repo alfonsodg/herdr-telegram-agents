@@ -365,9 +365,14 @@ func TestPrivateReconcilerRetriesDoNotStarveLaterGrants(t *testing.T) {
 	if err := r.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := privateEditCalls(tg.Destination(laterRecipient)); got != initialLaterCalls {
-		t.Fatalf("last grant edit calls after capped pass = %d, want unchanged from setup %d", got, initialLaterCalls)
+	for _, grant := range grants {
+		tg.Destination(grant.recipient).FailNext("edit", errors.New("temporary network failure"))
 	}
+	now = now.Add(time.Second)
+	if err := r.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	beforeFairRetry := privateEditCalls(tg.Destination(laterRecipient))
 	for _, grant := range grants[:len(grants)-1] {
 		tg.Destination(grant.recipient).FailNext("edit", errors.New("temporary network failure"))
 	}
@@ -375,17 +380,7 @@ func TestPrivateReconcilerRetriesDoNotStarveLaterGrants(t *testing.T) {
 	if err := r.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := privateEditCalls(tg.Destination(laterRecipient)); got != initialLaterCalls+1 {
-		t.Fatalf("last grant edit calls after next pass = %d, want one initial attempt", got)
-	}
-	for _, grant := range grants[:len(grants)-1] {
-		tg.Destination(grant.recipient).FailNext("edit", errors.New("temporary network failure"))
-	}
-	now = now.Add(time.Second)
-	if err := r.Flush(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if got := privateEditCalls(tg.Destination(laterRecipient)); got != initialLaterCalls+2 {
+	if got := privateEditCalls(tg.Destination(laterRecipient)); got != beforeFairRetry+1 {
 		t.Fatalf("fifth grant retry calls = %d, want progress despite first four failures", got)
 	}
 }

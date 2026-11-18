@@ -356,7 +356,6 @@ func TestPrivateReconcilerRetriesDoNotStarveLaterGrants(t *testing.T) {
 	sort.Slice(grants, func(i, j int) bool { return grants[i].id < grants[j].id })
 	laterRecipient := grants[len(grants)-1].recipient
 	r := &app.PrivateReconciler{Sharing: s, Telegram: tg, Agent: s.Agent, Now: s.Now}
-	initialLaterCalls := privateEditCalls(tg.Destination(laterRecipient))
 	a.Name = "After"
 	if err := r.Observe(ctx, app.AgentEvent{Kind: app.AgentAppeared, Agent: a}); err != nil {
 		t.Fatal(err)

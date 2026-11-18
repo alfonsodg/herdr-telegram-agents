@@ -406,6 +406,21 @@ Herdr 0.9.3 or later. Record the Herdr version and outcomes only.
 - [ ] Send `/clear` to a Claude Code agent waiting at a dialog: it is
   refused with a hint and nothing is typed into the dialog.
 
+## Fork integration and local runtime (2026-11-18)
+
+Fork `develop` is at `3a7f2f0`, integrating issues `#25–28` and `#30–39`. Sandbox
+validation passed `make test` (race), `make lint` (including staticcheck,
+import checks and all cross-build targets), and CI run
+[44230994051](https://github.com/alfonsodg/herdr-telegram-agents/actions/runs/44230994051)
+on Linux, macOS and Windows.
+
+The local Herdr plugin is linked and enabled from `worktrees/develop`. After
+building `0.17.7-local` and restarting the plugin daemon, its status reported
+`herdr=ok`, `telegram=ready`, `pager=on`, `sync=off` and 13 active agents.
+No Telegram message was sent for this deployment check. Issues `#25–28` and
+`#30–39` are in `status::review`; none were closed by the agent. Upstream PRs
+`#54–62` remain subject to upstream review.
+
 ## See Also
 
 - [Development](development.md): building from source, make targets and the tree layout

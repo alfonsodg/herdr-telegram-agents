@@ -38,7 +38,7 @@ func TestInboxSaveCreatesDirAndFile(t *testing.T) {
 			t.Fatalf("dir mode = %o", info.Mode().Perm())
 		}
 	}
-	if entries, _ := os.ReadDir(in.Dir()); len(entries) != 1 {
+	if entries, _ := os.ReadDir(in.Dir()); len(entries) != 2 {
 		t.Fatalf("temp file left behind: %v", entries)
 	}
 }

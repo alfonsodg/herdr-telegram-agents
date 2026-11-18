@@ -120,32 +120,37 @@ func (g *Gateway) ReopenTopic(ctx context.Context, threadID int) error {
 // messages. Both calls go through the queue.
 func (g *Gateway) Rights(ctx context.Context) (domain.Rights, error) {
 	var rights domain.Rights
+	forumResult := make(chan bool, 1)
 	err := g.queue.Do(ctx, func(ctx context.Context) error {
 		chat, err := g.api.GetChat(ctx, &bot.GetChatParams{ChatID: g.chatID})
 		if err != nil {
 			return fmt.Errorf("getChat: %w", translate(err))
 		}
-		rights.IsForum = chat.IsForum
+		forumResult <- chat.IsForum
 		return nil
 	})
 	if err != nil {
 		return rights, g.finish("getChat", err, slog.Int64("chat_id", g.chatID))
 	}
-	var membership domain.Rights
+	rights.IsForum = <-forumResult
+	membershipResult := make(chan domain.Rights, 1)
 	err = g.queue.Do(ctx, func(ctx context.Context) error {
 		member, err := g.api.GetChatMember(ctx, &bot.GetChatMemberParams{ChatID: g.chatID, UserID: g.botID})
 		if err != nil {
 			return fmt.Errorf("getChatMember: %w", translate(err))
 		}
-		membership.IsAdmin = member.Type == models.ChatMemberTypeAdministrator || member.Type == models.ChatMemberTypeOwner
-		membership.CanManageTopics = canManageTopics(*member) || member.Type == models.ChatMemberTypeOwner
-		membership.CanDeleteMessages = canDeleteMessages(*member) || member.Type == models.ChatMemberTypeOwner
-		membership.CanPinMessages = canPinMessages(*member) || member.Type == models.ChatMemberTypeOwner
+		membership := domain.Rights{
+			IsForum:           rights.IsForum,
+			IsAdmin:           member.Type == models.ChatMemberTypeAdministrator || member.Type == models.ChatMemberTypeOwner,
+			CanManageTopics:   canManageTopics(*member) || member.Type == models.ChatMemberTypeOwner,
+			CanDeleteMessages: canDeleteMessages(*member) || member.Type == models.ChatMemberTypeOwner,
+			CanPinMessages:    canPinMessages(*member) || member.Type == models.ChatMemberTypeOwner,
+		}
+		membershipResult <- membership
 		return nil
 	})
 	if err == nil {
-		membership.IsForum = rights.IsForum
-		rights = membership
+		rights = <-membershipResult
 	}
 	return rights, g.finish("getChatMember", err,
 		slog.Bool("forum", rights.IsForum), slog.Bool("admin", rights.IsAdmin),

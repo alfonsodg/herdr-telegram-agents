@@ -178,7 +178,7 @@ func TestInboxSaveFailurePreservesFiles(t *testing.T) {
 
 func TestInboxQuotaCanEvictLongBasename(t *testing.T) {
 	in := state.NewInbox(t.TempDir(), nil)
-	in.MaxTotal = func() int64 { return 2 }
+	in.MaxTotal = func() int64 { return 1 }
 	name := strings.Repeat("a", 240)
 	old, err := in.Save(context.Background(), name, []byte("x"))
 	if err != nil {

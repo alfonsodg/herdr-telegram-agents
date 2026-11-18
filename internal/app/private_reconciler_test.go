@@ -356,6 +356,7 @@ func TestPrivateReconcilerRetriesDoNotStarveLaterGrants(t *testing.T) {
 	sort.Slice(grants, func(i, j int) bool { return grants[i].id < grants[j].id })
 	laterRecipient := grants[len(grants)-1].recipient
 	r := &app.PrivateReconciler{Sharing: s, Telegram: tg, Agent: s.Agent, Now: s.Now}
+	initialLaterCalls := privateEditCalls(tg.Destination(laterRecipient))
 	a.Name = "After"
 	if err := r.Observe(ctx, app.AgentEvent{Kind: app.AgentAppeared, Agent: a}); err != nil {
 		t.Fatal(err)
@@ -364,8 +365,8 @@ func TestPrivateReconcilerRetriesDoNotStarveLaterGrants(t *testing.T) {
 	if err := r.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := privateEditCalls(tg.Destination(laterRecipient)); got != 0 {
-		t.Fatalf("fifth grant edit calls after capped pass = %d, want it deferred", got)
+	if got := privateEditCalls(tg.Destination(laterRecipient)); got != initialLaterCalls {
+		t.Fatalf("last grant edit calls after capped pass = %d, want unchanged from setup %d", got, initialLaterCalls)
 	}
 	for _, grant := range grants[:len(grants)-1] {
 		tg.Destination(grant.recipient).FailNext("edit", errors.New("temporary network failure"))
@@ -374,8 +375,8 @@ func TestPrivateReconcilerRetriesDoNotStarveLaterGrants(t *testing.T) {
 	if err := r.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := privateEditCalls(tg.Destination(laterRecipient)); got != 1 {
-		t.Fatalf("fifth grant edit calls after next pass = %d, want one initial attempt", got)
+	if got := privateEditCalls(tg.Destination(laterRecipient)); got != initialLaterCalls+1 {
+		t.Fatalf("last grant edit calls after next pass = %d, want one initial attempt", got)
 	}
 	for _, grant := range grants[:len(grants)-1] {
 		tg.Destination(grant.recipient).FailNext("edit", errors.New("temporary network failure"))
@@ -384,7 +385,7 @@ func TestPrivateReconcilerRetriesDoNotStarveLaterGrants(t *testing.T) {
 	if err := r.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if got := privateEditCalls(tg.Destination(laterRecipient)); got != 2 {
+	if got := privateEditCalls(tg.Destination(laterRecipient)); got != initialLaterCalls+2 {
 		t.Fatalf("fifth grant retry calls = %d, want progress despite first four failures", got)
 	}
 }

@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
+	"errors"
 	"io"
 	"os"
 )
@@ -23,6 +25,7 @@ func lastLinesWithReadAt(f *os.File, n int, readAt func([]byte, int64) (int, err
 	}
 	ring := make([]string, 0, n+1)
 	sc := bufio.NewScanner(io.NewSectionReader(f, 0, end))
+	sc.Split(splitLogLines)
 	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
 	for sc.Scan() {
 		if len(ring) == n+1 {
@@ -35,6 +38,11 @@ func lastLinesWithReadAt(f *os.File, n int, readAt func([]byte, int64) (int, err
 	}
 	var lastByte [1]byte
 	if _, err := readAt(lastByte[:], end-1); err != nil {
+		if errors.Is(err, io.EOF) {
+			// The file shrank after the snapshot size was recorded. Drop the
+			// partial snapshot and let the tailer poll the current file at 0.
+			return nil, "", 0, nil
+		}
 		return nil, "", 0, err
 	}
 	var partial string
@@ -46,4 +54,16 @@ func lastLinesWithReadAt(f *os.File, n int, readAt func([]byte, int64) (int, err
 		ring = ring[len(ring)-n:]
 	}
 	return ring, partial, end, nil
+}
+
+// splitLogLines preserves a carriage return on an unterminated final token.
+// ScanLines strips it even when the snapshot ends before the newline arrives.
+func splitLogLines(data []byte, atEOF bool) (int, []byte, error) {
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		return i + 1, bytes.TrimSuffix(data[:i], []byte{'\r'}), nil
+	}
+	if atEOF && len(data) > 0 {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
 }

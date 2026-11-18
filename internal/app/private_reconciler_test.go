@@ -245,6 +245,49 @@ func TestPrivateReconcilerRetriesAgentGoneEditOnLaterFlush(t *testing.T) {
 	if got := privateEditCalls(tg.Destination(10)); got != 2 {
 		t.Fatalf("total edit calls = %d, want exactly one retry", got)
 	}
+	if err := r.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := privateEditCalls(tg.Destination(10)); got != 2 {
+		t.Fatalf("edit calls after completed retry = %d, want no repeated edit", got)
+	}
+}
+
+func TestPrivateReconcilerDropsStaleExitAfterSessionResume(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(1000, 0)
+	s := app.NewSharing(ctx, testkit.NewMemSharingStore(), nil)
+	s.BotID = 42
+	s.Now = func() time.Time { return now }
+	a := domain.Agent{Key: domain.Key{PaneID: "p", TerminalID: "t", SessionDigest: "digest"}, Name: "Agent", Status: domain.StatusIdle}
+	s.Agent = func(k domain.Key) (domain.Agent, bool) { return a, k == a.Key }
+	_, _ = s.Register(ctx, 10, 10, "name", "", now)
+	g, err := s.Grant(ctx, app.GrantRequest{RecipientID: 10, Key: a.Key, Role: domain.ShareRead, Bot: domain.BotIdentity{ID: 42, HasTopicsEnabled: true}}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tg := testkit.NewFakeTelegram(nil)
+	r := &app.PrivateReconciler{Sharing: s, Telegram: tg, Agent: s.Agent, Now: s.Now}
+	if err := r.Grant(ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	tg.Destination(10).FailNext("edit", errors.New("temporary network failure"))
+	if err := r.Observe(ctx, app.AgentEvent{Kind: app.AgentGone, Agent: a}); err != nil {
+		t.Fatal(err)
+	}
+	a.TerminalID = "resumed"
+	if err := r.Observe(ctx, app.AgentEvent{Kind: app.AgentAppeared, Agent: a}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	if err := r.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := s.Snapshot()
+	topic, ok := tg.Destination(10).Topic(st.Mirrors[g.ID].Address.ThreadID)
+	if !ok || topic.IconEmojiID != string(domain.StatusIdle) {
+		t.Fatalf("resumed topic = %+v, exists=%v, want resumed idle state", topic, ok)
+	}
 }
 
 func TestPrivateReconcilerDoesNotRetryUnavailableRecipient(t *testing.T) {
@@ -299,9 +342,7 @@ func TestPrivateReconcilerRetriesDoNotStarveLaterGrants(t *testing.T) {
 		if err := (&app.PrivateReconciler{Sharing: s, Telegram: tg, Agent: s.Agent, Now: s.Now}).Grant(ctx, g); err != nil {
 			t.Fatal(err)
 		}
-		if recipient < 14 {
-			tg.Destination(recipient).FailNext("edit", errors.New("temporary network failure"))
-		}
+		tg.Destination(recipient).FailNext("edit", errors.New("temporary network failure"))
 	}
 	r := &app.PrivateReconciler{Sharing: s, Telegram: tg, Agent: s.Agent, Now: s.Now}
 	a.Name = "After"
@@ -312,8 +353,28 @@ func TestPrivateReconcilerRetriesDoNotStarveLaterGrants(t *testing.T) {
 	if err := r.Flush(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if got := privateEditCalls(tg.Destination(14)); got != 0 {
+		t.Fatalf("fifth grant edit calls after capped pass = %d, want it deferred", got)
+	}
+	for recipient := int64(10); recipient < 13; recipient++ {
+		tg.Destination(recipient).FailNext("edit", errors.New("temporary network failure"))
+	}
+	now = now.Add(time.Second)
+	if err := r.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if got := privateEditCalls(tg.Destination(14)); got != 1 {
-		t.Fatalf("fifth grant edit calls after retry pass = %d, want new work to progress", got)
+		t.Fatalf("fifth grant edit calls after next pass = %d, want one initial attempt", got)
+	}
+	for recipient := int64(10); recipient < 14; recipient++ {
+		tg.Destination(recipient).FailNext("edit", errors.New("temporary network failure"))
+	}
+	now = now.Add(time.Second)
+	if err := r.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := privateEditCalls(tg.Destination(14)); got != 2 {
+		t.Fatalf("fifth grant retry calls = %d, want progress despite first four failures", got)
 	}
 }
 
